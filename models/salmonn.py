@@ -543,9 +543,11 @@ class SALMONN(nn.Module):
         if self.use_soft_prompting or self.l2p:
             embeds = self.inject_soft_prompt(embeds, speech_embeds.mean(1))
             
+            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
+            
             # Create a soft prompt attention mask (all ones)
             soft_prompt_mask = torch.ones(
-                (embeds.shape[0], self.num_soft_prompt_tokens), 
+                (embeds.shape[0], num_prompts), 
                 dtype=attns.dtype, 
                 device=attns.device
             )
@@ -611,8 +613,6 @@ class SALMONN(nn.Module):
         low_resource = config.get("low_resource", False)
         device_8bit = config.get("device_8bit", 0)
         
-        metric_name = config.get("metric_name", "next_token_prediction")
-
         model = cls(
             llama_model_name=llama_model_name,
             cache_dir=cache_dir,

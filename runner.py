@@ -181,6 +181,7 @@ class Runner:
 
     @torch.no_grad()
     def valid_epoch(self, epoch, split, save_json=False):
+        start_time = time.time()
         model = self.unwrap_dist_model(self.model)
         model.eval()
 
@@ -234,13 +235,17 @@ class Runner:
             total_samples += len(samples["id"])
 
         # **Compute Corpus-Level BLEU Score**
+        bleu_start_time = time.time()
         total_bleu_score = corpus_bleu(all_references, all_hypotheses)
+        bleu_time = time.time() - bleu_start_time
 
         # **Compute Corpus-Level ROUGE-L Score**
+        rouge_start_time = time.time()
         total_rouge_score = sum(
             scorer.score(" ".join(ref[0]), " ".join(hyp))["rougeL"].fmeasure
             for ref, hyp in zip(all_references, all_hypotheses)
         ) / len(all_references)
+        rouge_time = time.time() - rouge_start_time
 
         # **Synchronize Across Distributed Processes**
         if is_dist_avail_and_initialized():
@@ -255,6 +260,12 @@ class Runner:
         mean_bleu = total_bleu_score if total_samples > 0 else 0.0
         mean_rouge = total_rouge_score if total_samples > 0 else 0.0
 
+        total_validation_time = time.time() - start_time
+        logging.info(f"\n[Validation Completed] Epoch {epoch}")
+        logging.info(f" - BLEU computation time: {bleu_time:.2f} seconds")
+        logging.info(f" - ROUGE computation time: {rouge_time:.2f} seconds")
+        logging.info(f" - Total validation time: {total_validation_time:.2f} seconds")
+        
         # **Save JSON if needed**
         if save_json and is_main_process():
             self.save_result(results, self.output_dir, f"eval_{split}_epoch_{epoch}")
