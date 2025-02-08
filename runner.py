@@ -8,6 +8,9 @@ from pathlib import Path
 import logging
 import wandb
 
+import re
+from nltk.translate.bleu_score import corpus_bleu
+from rouge_score import rouge_scorer
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -17,6 +20,14 @@ from dist_utils import main_process, is_dist_avail_and_initialized, is_main_proc
 from logger import MetricLogger, SmoothedValue
 from utils import get_dataloader, prepare_sample
 from optims import get_optimizer, LinearWarmupCosineLRScheduler
+from transformers.utils.logging import set_verbosity_error
+
+def clean_text(text):
+    """Lowercases, removes punctuation, and strips extra spaces."""
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", "", text)  # Remove punctuation
+    text = re.sub(r"\s+", " ", text).strip()  # Remove extra spaces
+    return text
 
 
 class Runner:
@@ -168,94 +179,113 @@ class Runner:
             for k, meter in metric_logger.meters.items()
         }
 
+
     @torch.no_grad()
-    def valid_epoch(self, epoch, split, decode=False, save_json=False):
+    def valid_epoch(self, epoch, split, save_json=False):
+        start_time = time.time()
         model = self.unwrap_dist_model(self.model)
         model.eval()
 
-        dataloader = getattr(self, split + "_loader", None)
-        assert dataloader is not None, "{}_loader does not exist.".format(split)
+        dataloader = getattr(self, f"{split}_loader", None)
+        assert dataloader is not None, f"{split}_loader does not exist."
 
         metric_logger = MetricLogger(delimiter="  ")
-        header = "Eval: data epoch: [{}]".format(epoch)
+        header = f"Eval: data epoch: [{epoch}]"
 
         results = []
+        total_samples = torch.tensor(0, dtype=torch.float32, device=self.device)
+
+        all_references = []  # For BLEU & ROUGE
+        all_hypotheses = []
+        
+        total_correct = torch.tensor(0, dtype=torch.float32, device=self.device)  # Exact match
+        total_bleu_score = torch.tensor(0, dtype=torch.float32, device=self.device)
+        total_rouge_score = torch.tensor(0, dtype=torch.float32, device=self.device)
+
+        scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+
         for samples in metric_logger.log_every(dataloader, self.config.config.run.log_freq, header=header):
             samples = prepare_sample(samples, cuda_enabled=self.cuda_enabled)
 
             with torch.cuda.amp.autocast(enabled=self.use_amp):
-                forward_result = model(samples, verbose=True)
-            loss = forward_result.get("loss", 0)
-            correct = forward_result.get("correct", 0)
-            total = forward_result.get("total", 1)
-            res = {
+                generated_texts = model.generate(samples, self.config.config.run)
+                ground_truths = samples["text"]
+
+                # Preprocess both ground truth and generated text
+                generated_texts = [clean_text(text) for text in generated_texts]
+                ground_truths = [clean_text(text) for text in ground_truths]
+
+                # **Exact Match Calculation**
+                exact_matches = torch.tensor(
+                    [p == t for p, t in zip(generated_texts, ground_truths)],
+                    dtype=torch.float32,
+                    device=self.device
+                )
+                total_correct += exact_matches.sum()
+
+                # **BLEU & ROUGE-L Preparation**
+                all_references.extend([[t.split()] for t in ground_truths])  # Tokenized refs
+                all_hypotheses.extend([p.split() for p in generated_texts])  # Tokenized preds
+
+            results.append({
                 "id": samples["id"],
-                "ground_truth": samples["text"],
-                "loss": loss.item(),
-                "acc": (correct / total).item(),
-                "total": total,
-            }
+                "ground_truth": ground_truths,
+                "generated_text": generated_texts,
+            })
 
-            if decode:
-                if model.prompt_dict:
-                    if self.test_prompt_dict is None:
-                        prompts = None
-                    else:
-                        prompts = [self.test_prompt_dict[s] for s in samples["task"]]
-                        if "Q" in samples:
-                            prompts = [p.format(q) if "{}" in p else p for p, q in zip(prompts, samples["Q"])]
-                else:
-                    prompts = None
+            total_samples += len(samples["id"])
 
-                text = model.generate(samples, self.config.config.run, prompts=prompts)
-                res["text"] = text
-                res["prompt"] = prompts
-                res["task"] = samples["task"]
+        # **Compute Corpus-Level BLEU Score**
+        bleu_start_time = time.time()
+        total_bleu_score = corpus_bleu(all_references, all_hypotheses)
+        bleu_time = time.time() - bleu_start_time
 
-            results.append(res)
+        # **Compute Corpus-Level ROUGE-L Score**
+        rouge_start_time = time.time()
+        total_rouge_score = sum(
+            scorer.score(" ".join(ref[0]), " ".join(hyp))["rougeL"].fmeasure
+            for ref, hyp in zip(all_references, all_hypotheses)
+        ) / len(all_references)
+        rouge_time = time.time() - rouge_start_time
 
+        # **Synchronize Across Distributed Processes**
         if is_dist_avail_and_initialized():
             dist.barrier()
+            dist.all_reduce(total_correct)
+            dist.all_reduce(total_bleu_score)
+            dist.all_reduce(total_rouge_score)
+            dist.all_reduce(total_samples)
 
-        if save_json:
-            self.save_result(results, self.output_dir, "eval_{}_epoch_{}".format(split, epoch))
+        # **Compute Final Scores**
+        mean_exact = (total_correct / total_samples).item() if total_samples > 0 else 0.0
+        mean_bleu = total_bleu_score if total_samples > 0 else 0.0
+        mean_rouge = total_rouge_score if total_samples > 0 else 0.0
 
-        res = {
-            "loss": torch.tensor(0).float().cuda(),
-            "n_sample": torch.tensor(0).float().cuda(),
-            "correct": torch.tensor(0).float().cuda(),
-            "n_token": torch.tensor(0).float().cuda(),
-        }
-        for item in results:
-            item_loss = item["loss"]
-            item_n_sample = len(item["id"])
-            item_correct = item["acc"] * item["total"]
-            item_n_token = item["total"]
-            res["loss"] += item_loss * item_n_sample
-            res["n_sample"] += item_n_sample
-            res["correct"] += item_correct
-            res["n_token"] += item_n_token
-
-        if is_dist_avail_and_initialized():
-            dist.all_reduce(res["loss"])
-            dist.all_reduce(res["n_sample"])
-            dist.all_reduce(res["correct"])
-            dist.all_reduce(res["n_token"])
-
-        ret = {"loss": 0, "agg_metrics": 0}
-        ret["loss"] = (res["loss"] / res["n_sample"]).item()
-        ret["agg_metrics"] = (res["correct"] / res["n_token"]).item()
+        total_validation_time = time.time() - start_time
+        logging.info(f"\n[Validation Completed] Epoch {epoch}")
+        logging.info(f" - BLEU computation time: {bleu_time:.2f} seconds")
+        logging.info(f" - ROUGE computation time: {rouge_time:.2f} seconds")
+        logging.info(f" - Total validation time: {total_validation_time:.2f} seconds")
         
-        # Log validation results to wandb
+        # **Save JSON if needed**
+        if save_json and is_main_process():
+            self.save_result(results, self.output_dir, f"eval_{split}_epoch_{epoch}")
+
+        # **Log Results to WandB**
         if is_main_process():
             wandb.log({
-                "val/loss": ret["loss"],
-                "val/accuracy": ret["agg_metrics"],
+                "val/mean_exact_match": mean_exact,
+                "val/mean_bleu_score": mean_bleu,
+                "val/mean_rougeL_score": mean_rouge,
                 "epoch": epoch
             })
 
+        return {
+            "mean_exact_match": mean_exact,
+            "mean_bleu_score": mean_bleu,
+            "mean_rougeL_score": mean_rouge,
+        }
 
-        return ret
 
     def save_result(self, result, result_dir, filename):
         result_file = os.path.join(
@@ -300,6 +330,8 @@ class Runner:
         best_agg_metric = 0
         best_epoch = 0
 
+        set_verbosity_error()
+        valid_log = self.valid_epoch(0, "valid", save_json=True)
         for cur_epoch in range(self.start_epoch, self.max_epoch):
             if self.evaluate_only:
                 break
@@ -311,10 +343,11 @@ class Runner:
 
             # validating phase
             logging.info("Validating Phase")
-            valid_log = self.valid_epoch(cur_epoch, "valid", decode=False, save_json=False)
+            set_verbosity_error()
+            valid_log = self.valid_epoch(cur_epoch+1, "valid", save_json=True)
             if valid_log is not None:
                 if is_main_process():
-                    agg_metrics = valid_log["agg_metrics"]
+                    agg_metrics = valid_log["mean_bleu_score"]
                     if agg_metrics > best_agg_metric:
                         best_agg_metric = agg_metrics
                         best_epoch = cur_epoch
@@ -331,7 +364,7 @@ class Runner:
 
         # testing phase
         if self.evaluate_only:
-            test_log = self.valid_epoch("best", "test", decode=True, save_json=True)
+            test_log = self.valid_epoch("best", "test", save_json=True)
             if is_main_process():
                 wandb.log({
                     "test/loss": test_log.get("loss", 0), 

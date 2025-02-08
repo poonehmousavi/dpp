@@ -9,3 +9,5 @@ accelerate==0.20.3
 bitsandbytes==0.45.1
 gradio==3.23.0
 wandb==0.19.6
+nltk==3.9.1
+rouge-score==0.1.2

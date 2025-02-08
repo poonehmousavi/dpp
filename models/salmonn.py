@@ -29,13 +29,10 @@ from .modeling_whisper import WhisperModel
 from .beats.BEATs import BEATsConfig, BEATs
 from .utils import StoppingCriteriaSub
 
-
 class PromptPool(nn.Module):
     def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None):
         super().__init__()
         self.num_prompts = num_prompts
-        self.usage_counts = torch.zeros(num_prompts, dtype=torch.long)  # Track frequency of each prompt
-
         
         # Initialize keys with small random values
         self.prompt_keys = nn.Parameter(torch.randn(num_prompts, prompt_dim) * 0.01)  # Learnable keys
@@ -58,8 +55,6 @@ class PromptPool(nn.Module):
         similarities = torch.matmul(input_embedding, self.prompt_keys.T)  # [batch_size, num_prompts]
 
         topk_indices = torch.topk(similarities, top_k, dim=1).indices  # Get top-k prompt indices
-        unique, counts = torch.unique(topk_indices, return_counts=True)
-        self.usage_counts.index_add_(0, unique, counts)
 
         # Gather the selected prompts in a vectorized manner
         assert (topk_indices >= 0).all() and (topk_indices < self.prompt_values.size(0)).all(), "Index out of bounds!"
@@ -540,12 +535,14 @@ class SALMONN(nn.Module):
         embeds = torch.cat([bos_embeds, speech_embeds], dim=1)
         attns = torch.cat([atts_bos, speech_atts], dim=1)
         
-        if self.use_soft_prompting:
+        if self.use_soft_prompting or self.l2p:
             embeds = self.inject_soft_prompt(embeds, speech_embeds.mean(1))
+            
+            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
             
             # Create a soft prompt attention mask (all ones)
             soft_prompt_mask = torch.ones(
-                (embeds.shape[0], self.num_soft_prompt_tokens), 
+                (embeds.shape[0], num_prompts), 
                 dtype=attns.dtype, 
                 device=attns.device
             )
@@ -610,7 +607,7 @@ class SALMONN(nn.Module):
         end_sym = config.get("end_sym", "</s>")
         low_resource = config.get("low_resource", False)
         device_8bit = config.get("device_8bit", 0)
-
+        
         model = cls(
             llama_model_name=llama_model_name,
             cache_dir=cache_dir,
