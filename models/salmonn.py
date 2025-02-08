@@ -29,7 +29,6 @@ from .modeling_whisper import WhisperModel
 from .beats.BEATs import BEATsConfig, BEATs
 from .utils import StoppingCriteriaSub
 
-
 class PromptPool(nn.Module):
     def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None):
         super().__init__()

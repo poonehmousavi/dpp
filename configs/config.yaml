@@ -90,6 +90,8 @@ run:
   run_name: "baseline"
   project_name: "l2p"
 
+  max_new_tokens: 10
+
   # optimizer & scheduler
   optims:
     max_epoch: 30

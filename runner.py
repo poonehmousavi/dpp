@@ -20,6 +20,7 @@ from dist_utils import main_process, is_dist_avail_and_initialized, is_main_proc
 from logger import MetricLogger, SmoothedValue
 from utils import get_dataloader, prepare_sample
 from optims import get_optimizer, LinearWarmupCosineLRScheduler
+from transformers.utils.logging import set_verbosity_error
 
 def clean_text(text):
     """Lowercases, removes punctuation, and strips extra spaces."""
@@ -329,6 +330,8 @@ class Runner:
         best_agg_metric = 0
         best_epoch = 0
 
+        set_verbosity_error()
+        valid_log = self.valid_epoch(0, "valid", save_json=True)
         for cur_epoch in range(self.start_epoch, self.max_epoch):
             if self.evaluate_only:
                 break
@@ -340,10 +343,11 @@ class Runner:
 
             # validating phase
             logging.info("Validating Phase")
-            valid_log = self.valid_epoch(cur_epoch, "valid", save_json=True)
+            set_verbosity_error()
+            valid_log = self.valid_epoch(cur_epoch+1, "valid", save_json=True)
             if valid_log is not None:
                 if is_main_process():
-                    agg_metrics = valid_log["agg_metrics"]
+                    agg_metrics = valid_log["mean_bleu_score"]
                     if agg_metrics > best_agg_metric:
                         best_agg_metric = agg_metrics
                         best_epoch = cur_epoch
