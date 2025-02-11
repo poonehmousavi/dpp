@@ -203,12 +203,15 @@ class Runner:
         total_rouge_score = torch.tensor(0, dtype=torch.float32, device=self.device)
 
         scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+        
+        valid_iters = 0
 
         for samples in metric_logger.log_every(dataloader, self.config.config.run.log_freq, header=header):
             samples = prepare_sample(samples, cuda_enabled=self.cuda_enabled)
+            prompts = [self.test_prompt_dict[task] for task in samples["task"]]
 
             with torch.cuda.amp.autocast(enabled=self.use_amp):
-                generated_texts = model.generate(samples, self.config.config.run)
+                generated_texts = model.generate(samples, self.config.config.run, prompts=prompts)
                 ground_truths = samples["text"]
 
                 # Preprocess both ground truth and generated text
@@ -234,6 +237,11 @@ class Runner:
             })
 
             total_samples += len(samples["id"])
+            
+            # Run validation on only a subset of data to enable faster training.
+            valid_iters += 1
+            if self.config.config.run.num_valid_iters and valid_iters >= self.config.config.run.num_valid_iters:
+                break
 
         # **Compute Corpus-Level BLEU Score**
         bleu_start_time = time.time()
@@ -266,6 +274,9 @@ class Runner:
         logging.info(f" - BLEU computation time: {bleu_time:.2f} seconds")
         logging.info(f" - ROUGE computation time: {rouge_time:.2f} seconds")
         logging.info(f" - Total validation time: {total_validation_time:.2f} seconds")
+        logging.info(f" - Exact Match (Strict): {mean_exact:.4f}")
+        logging.info(f" - BLEU Score: {mean_bleu:.4f}")
+        logging.info(f" - ROUGE-L Score: {mean_rouge:.4f}")
         
         # **Save JSON if needed**
         if save_json and is_main_process():
