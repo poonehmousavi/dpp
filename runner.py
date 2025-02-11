@@ -8,6 +8,8 @@ from pathlib import Path
 import logging
 import wandb
 
+import evaluate
+
 import re
 from nltk.translate.bleu_score import corpus_bleu
 from rouge_score import rouge_scorer
@@ -194,15 +196,17 @@ class Runner:
 
         results = []
         total_samples = torch.tensor(0, dtype=torch.float32, device=self.device)
+        
+        bleu_metric = evaluate.load("bleu")
+        rouge_metric = evaluate.load("rouge")
+        rouge_scorer_obj = rouge_scorer.RougeScorer(["rouge4"], use_stemmer=True)
+        wer_metric = evaluate.load("wer")
+
 
         all_references = []  # For BLEU & ROUGE
         all_hypotheses = []
         
         total_correct = torch.tensor(0, dtype=torch.float32, device=self.device)  # Exact match
-        total_bleu_score = torch.tensor(0, dtype=torch.float32, device=self.device)
-        total_rouge_score = torch.tensor(0, dtype=torch.float32, device=self.device)
-
-        scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
         
         valid_iters = 0
 
@@ -227,8 +231,8 @@ class Runner:
                 total_correct += exact_matches.sum()
 
                 # **BLEU & ROUGE-L Preparation**
-                all_references.extend([[t.split()] for t in ground_truths])  # Tokenized refs
-                all_hypotheses.extend([p.split() for p in generated_texts])  # Tokenized preds
+                all_references.extend([[t] for t in ground_truths])
+                all_hypotheses.extend(generated_texts)
 
             results.append({
                 "id": samples["id"],
@@ -245,38 +249,52 @@ class Runner:
 
         # **Compute Corpus-Level BLEU Score**
         bleu_start_time = time.time()
-        total_bleu_score = corpus_bleu(all_references, all_hypotheses)
+        bleu_score = bleu_metric.compute(predictions=all_hypotheses, references=all_references)["bleu"]
         bleu_time = time.time() - bleu_start_time
 
-        # **Compute Corpus-Level ROUGE-L Score**
+        # **Compute Corpus-Level ROUGE-L and Rouge-4 Score**
         rouge_start_time = time.time()
-        total_rouge_score = sum(
-            scorer.score(" ".join(ref[0]), " ".join(hyp))["rougeL"].fmeasure
+        rouge_scores = rouge_metric.compute(predictions=all_hypotheses, references=all_references)
+        total_rouge4_score = sum(
+            rouge_scorer_obj.score(ref, hyp)["rouge4"].fmeasure
             for ref, hyp in zip(all_references, all_hypotheses)
         ) / len(all_references)
         rouge_time = time.time() - rouge_start_time
+        
+        # Compute WER 
+        wer_start_time = time.time()
+        wer_score = wer_metric.compute(predictions=all_hypotheses, references=all_references)
+        wer_time = time.time() - wer_start_time
 
         # **Synchronize Across Distributed Processes**
         if is_dist_avail_and_initialized():
             dist.barrier()
             dist.all_reduce(total_correct)
-            dist.all_reduce(total_bleu_score)
-            dist.all_reduce(total_rouge_score)
+            dist.all_reduce(torch.tensor(bleu_score, device=self.device))
+            dist.all_reduce(torch.tensor(rouge_scores["rougeL"], device=self.device))
+            dist.all_reduce(torch.tensor(total_rouge4_score, device=self.device))
+            dist.all_reduce(torch.tensor(wer_score, device=self.device))
             dist.all_reduce(total_samples)
 
         # **Compute Final Scores**
         mean_exact = (total_correct / total_samples).item() if total_samples > 0 else 0.0
-        mean_bleu = total_bleu_score if total_samples > 0 else 0.0
-        mean_rouge = total_rouge_score if total_samples > 0 else 0.0
+        mean_bleu = bleu_score if total_samples > 0 else 0.0
+        mean_rouge = rouge_scores["rougeL"] if total_samples > 0 else 0.0
+        mean_rouge4 = total_rouge4_score if total_samples > 0 else 0.0
+        mean_wer = wer_score if total_samples > 0 else 0.0
+
 
         total_validation_time = time.time() - start_time
         logging.info(f"\n[Validation Completed] Epoch {epoch}")
         logging.info(f" - BLEU computation time: {bleu_time:.2f} seconds")
         logging.info(f" - ROUGE computation time: {rouge_time:.2f} seconds")
         logging.info(f" - Total validation time: {total_validation_time:.2f} seconds")
+        logging.info(f" - WER computation time: {wer_time:.2f} seconds")
         logging.info(f" - Exact Match (Strict): {mean_exact:.4f}")
         logging.info(f" - BLEU Score: {mean_bleu:.4f}")
         logging.info(f" - ROUGE-L Score: {mean_rouge:.4f}")
+        logging.info(f" - ROUGE4 Score: {mean_rouge4:.4f}")
+        logging.info(f" - WER Score: {mean_wer:.4f}")
         
         # **Save JSON if needed**
         if save_json and is_main_process():
@@ -288,6 +306,8 @@ class Runner:
                 "val/mean_exact_match": mean_exact,
                 "val/mean_bleu_score": mean_bleu,
                 "val/mean_rougeL_score": mean_rouge,
+                "val/mean_rouge4_score": mean_rouge4,
+                "val/mean_wer_score": mean_wer,
                 "epoch": epoch
             })
 
@@ -295,6 +315,8 @@ class Runner:
             "mean_exact_match": mean_exact,
             "mean_bleu_score": mean_bleu,
             "mean_rougeL_score": mean_rouge,
+            "mean_rouge4_score": mean_rouge4,
+            "mean_wer_score": mean_wer,
         }
 
 
