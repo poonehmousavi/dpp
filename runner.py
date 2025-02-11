@@ -231,7 +231,7 @@ class Runner:
                 total_correct += exact_matches.sum()
 
                 # **BLEU & ROUGE-L Preparation**
-                all_references.extend([[t] for t in ground_truths])
+                all_references.extend(ground_truths)
                 all_hypotheses.extend(generated_texts)
 
             results.append({
@@ -249,12 +249,12 @@ class Runner:
 
         # **Compute Corpus-Level BLEU Score**
         bleu_start_time = time.time()
-        bleu_score = bleu_metric.compute(predictions=all_hypotheses, references=all_references)["bleu"]
+        bleu_score = bleu_metric.compute(predictions=all_hypotheses, references=[[ref] for ref in all_references])["bleu"]
         bleu_time = time.time() - bleu_start_time
 
         # **Compute Corpus-Level ROUGE-L and Rouge-4 Score**
         rouge_start_time = time.time()
-        rouge_scores = rouge_metric.compute(predictions=all_hypotheses, references=all_references)
+        rouge_scores = rouge_metric.compute(predictions=all_hypotheses, references=[[ref] for ref in all_references])
         total_rouge4_score = sum(
             rouge_scorer_obj.score(ref, hyp)["rouge4"].fmeasure
             for ref, hyp in zip(all_references, all_hypotheses)

@@ -565,7 +565,7 @@ class SALMONN(nn.Module):
             length_penalty=generate_cfg.get("length_penalty", 1.0),
             attention_mask=attns,
         )
-        text = self.llama_tokenizer.batch_decode(outputs, add_special_tokens=False)
+        text = self.llama_tokenizer.batch_decode(outputs, add_special_tokens=False, skip_special_tokens=True)
 
         return text
 
