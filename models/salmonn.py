@@ -178,9 +178,10 @@ class SALMONN(nn.Module):
             )
             
         if self.llama_tokenizer.pad_token is None:
-            logging.info("There is no pad token present, using eos token instead")
-            self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token
-      
+            logging.info("There is no pad token present, learning a new one instead")
+            self.llama_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            self.llama_model.resize_token_embeddings(len(self.llama_tokenizer))
+        
         self.llama_tokenizer.padding_side = "right"
             
         for name, param in self.llama_model.named_parameters():
