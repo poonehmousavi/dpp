@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import torchaudio
 
 import torch
 from torch.utils.data import Dataset
@@ -68,6 +69,11 @@ class SALMONNDataset(Dataset):
         audio, sr = sf.read(ann["path"])
         if len(audio.shape) == 2: # stereo to mono
             audio = audio[:, 0]
+        if sr != 16000:
+            audio_tensor = torch.tensor(audio, dtype=torch.float32)
+            audio_tensor = torchaudio.functional.resample(audio_tensor, sr, 16000)
+            audio = audio_tensor.numpy()
+            sr = 16000
         if "expand_wav" in ann:
             for p in ann["expand_wav"]:
                 expand_audio, _ = sf.read(p)

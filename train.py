@@ -54,8 +54,8 @@ def setup_seeds(config):
 def get_paths(dataset_name):
     if dataset_name == "libriasr":
         return {
-            "train": "/home/toolkit/SALMONN/data/IEMOCAP/ie-train-full.json",
-            "test": "/home/toolkit/SALMONN/data/IEMOCAP/ie-test-full.json",
+            "train": "/home/toolkit/SALMONN/data/LibriASR/Librispeech-train-asr.json",
+            "test": "/home/toolkit/SALMONN/data/LibriASR/Librispeech-test-asr.json",
             "valid": "/home/toolkit/SALMONN/data/LibriASR/Librispeech-test-asr.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/libriSQA/",
         }

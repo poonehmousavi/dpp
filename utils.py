@@ -19,6 +19,7 @@ import torch
 from torch.utils.data import DataLoader, DistributedSampler
 import soundfile as sf
 import numpy as np
+import torchaudio
 
 from dist_utils import is_main_process, get_world_size, get_rank
 
@@ -140,6 +141,11 @@ def prepare_one_sample(wav_path, wav_processor, cuda_enabled=True):
     audio, sr = sf.read(wav_path)
     if len(audio.shape) == 2: # stereo to mono
         audio = audio[:, 0]
+    if sr != 16000:
+        audio_tensor = torch.tensor(audio, dtype=torch.float32)
+        audio_tensor = torchaudio.functional.resample(audio_tensor, sr, 16000)
+        audio = audio_tensor.numpy()
+        sr = 16000
     if len(audio) < sr: # pad audio to at least 1s
         sil = np.zeros(sr - len(audio), dtype=float)
         audio = np.concatenate((audio, sil), axis=0)

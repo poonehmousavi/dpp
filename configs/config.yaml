@@ -15,7 +15,7 @@
 model:
   # paths
   # llama_path: "/mnt/dssk/data_rw/shubham/l2p/llama3"
-  llama_model_name: "meta-llama/Meta-Llama-3-8B"
+  llama_model_name: "lmsys/vicuna-13b-v1.1"
   cache_dir: "/mnt/dssk/data_rw/shubham/l2p/llama3"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
   beats_path: "/mnt/dssk/data_rw/shubham/l2p/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt"
@@ -69,6 +69,8 @@ run:
   seed: 42
   output_dir: "baseline_run_wandb"
   evaluate: False # if True, only evaluate model on test data
+
+  valid_iters: 25
 
   log_freq: 5
   epoch_based: False
