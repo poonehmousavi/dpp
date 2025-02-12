@@ -60,7 +60,7 @@ model:
   end_sym: "</s>"
 
 datasets:
-  # possible options right now are "librisqa", "libriasr", "er"
+  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap"
   dataset: "libriasr"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
 

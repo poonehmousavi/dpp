@@ -73,6 +73,14 @@ def get_paths(dataset_name):
             "valid": "/home/toolkit/SALMONN/data/IEMOCAP/ie-valid-full.json",
             "data_root": "users/rwhetten/IEMOCAP/IEMOCAP_full_release/",
         }
+    if dataset_name == "clotho_audio_cap":
+        return {
+            "train": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_development.json",
+            "test": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_validation.json",
+            "valid": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_development.json",
+            "data_root": "/mnt/dssk/data_rw/shubham/l2p/clotho/",
+        }    
+    
 
 
 def main():
