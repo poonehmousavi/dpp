@@ -15,7 +15,7 @@
 model:
   # paths
   # llama_path: "/mnt/dssk/data_rw/shubham/l2p/llama3"
-  llama_model_name: "meta-llama/Meta-Llama-3-8B"
+  llama_model_name: "lmsys/vicuna-13b-v1.1"
   cache_dir: "/mnt/dssk/data_rw/shubham/l2p/llama3"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
   beats_path: "/mnt/dssk/data_rw/shubham/l2p/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt"
@@ -60,18 +60,17 @@ model:
   end_sym: "</s>"
 
 datasets:
-  train_ann_path: "/home/toolkit/SALMONN/data/IEMOCAP/ie-train.json"
-  valid_ann_path: "/home/toolkit/SALMONN/data/IEMOCAP/ie-valid.json"
-  test_ann_path: "/home/toolkit/SALMONN/data/IEMOCAP/ie-test.json"
-
+  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap"
+  dataset: "libriasr"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
-  data_root: "users/rwhetten/IEMOCAP/IEMOCAP_full_release/"
 
 run:
   # log & settings
   seed: 42
   output_dir: "baseline_run_wandb"
   evaluate: False # if True, only evaluate model on test data
+
+  valid_iters: 25
 
   log_freq: 5
   epoch_based: False

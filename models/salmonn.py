@@ -178,9 +178,10 @@ class SALMONN(nn.Module):
             )
             
         if self.llama_tokenizer.pad_token is None:
-            logging.info("There is no pad token present, using eos token instead")
-            self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token
-      
+            logging.info("There is no pad token present, learning a new one instead")
+            self.llama_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            self.llama_model.resize_token_embeddings(len(self.llama_tokenizer))
+        
         self.llama_tokenizer.padding_side = "right"
             
         for name, param in self.llama_model.named_parameters():
@@ -564,7 +565,7 @@ class SALMONN(nn.Module):
             length_penalty=generate_cfg.get("length_penalty", 1.0),
             attention_mask=attns,
         )
-        text = self.llama_tokenizer.batch_decode(outputs, add_special_tokens=False)
+        text = self.llama_tokenizer.batch_decode(outputs, add_special_tokens=False, skip_special_tokens=True)
 
         return text
 
