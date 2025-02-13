@@ -51,6 +51,7 @@ model:
   l2p: False
   pool_size: 30
   prompt_size: 10
+  p: 0.0
 
   multi_prompt: True
   prompt_template: "USER: {}\nASSISTANT:"

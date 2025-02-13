@@ -30,7 +30,7 @@ from .beats.BEATs import BEATsConfig, BEATs
 from .utils import StoppingCriteriaSub
 
 class PromptPool(nn.Module):
-    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None):
+    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1):
         super().__init__()
         self.num_prompts = num_prompts
         
@@ -42,6 +42,10 @@ class PromptPool(nn.Module):
             self.prompt_values = nn.Parameter(model_input_embeds)
         else:
             self.prompt_values = nn.Parameter(torch.randn(num_prompts, prompt_dim))
+            
+        self.dropout = None
+        if p > 0:
+            self.dropout = torch.nn.Dropout(p)
             
     def compute_cosine_similarity(self, input_embedding):
         """Compute cosine similarities between normalized input_embedding and prompt keys."""
@@ -58,8 +62,12 @@ class PromptPool(nn.Module):
         """
         # Compute similarities between input and prompt keys
         similarities = self.compute_cosine_similarity(input_embedding)  # [batch_size, num_prompts]
+            
         normalized_similarities = F.softmax(similarities, dim=1)
-        
+        if self.dropout is not None:
+            normalized_similarities = self.dropout(normalized_similarities)
+            normalized_similarities = F.softmax(similarities, dim=1)
+            
         # Select top-k indices and corresponding values
         topk_values, topk_indices = torch.topk(normalized_similarities, top_k, dim=1)
         
@@ -67,7 +75,7 @@ class PromptPool(nn.Module):
         selected_prompts = self.prompt_values[topk_indices]  # [B, top_k, prompt_dim]
         
         # Compute diversity loss as the sum of the top-k similarity values, averaged over the batch
-        diversity_loss = topk_values.sum(dim=1).mean()
+        diversity_loss = - topk_values.sum(dim=1).mean()
         
         selected_prompts = self.prompt_values[topk_indices]  # [batch_size, top_k, prompt_dim]
             
@@ -135,6 +143,7 @@ class SALMONN(nn.Module):
         l2p=False,
         pool_size=30,
         prompt_size=10,
+        p = 0.1,
         
         lambda_diversity=1.0,
 
@@ -165,6 +174,7 @@ class SALMONN(nn.Module):
         self.l2p=l2p
         self.pool_size=pool_size
         self.prompt_size=prompt_size
+        self.p = p
         
         self.lambda_diversity = lambda_diversity
         
@@ -238,7 +248,8 @@ class SALMONN(nn.Module):
                 self.prompt_pool = PromptPool(
                     num_prompts=self.pool_size,
                     prompt_dim=base_embedding_mean.shape[-1],
-                    model_input_embeds=base_embedding_mean.unsqueeze(0) + noise)
+                    model_input_embeds=base_embedding_mean.unsqueeze(0) + noise,
+                    p = self.p)
             num_trainable_params = self.pool_size * base_embedding_mean.shape[-1]
             total_params = sum(p.numel() for p in self.llama_model.parameters()) + num_trainable_params
 
@@ -379,13 +390,18 @@ class SALMONN(nn.Module):
 
         return self._encode_auditory_feature(speech_embeds, audio_embeds=audio_embeds)
     
-    def inject_soft_prompt(self, inputs_embeds, input_representations=None):
+    def inject_soft_prompt(self, inputs_embeds, input_representations=None, inference=False):
         """
         Injects soft prompts into the input embeddings. Supports both fixed and L2P-style soft prompts.
         """
         if self.l2p:
             assert input_representations is not None, "Input representations are required for L2P."
-            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=self.prompt_size)  # Select relevant prompts
+            if inference:
+                top_k = int(0.4 * self.pool_size)  # deterministic at inference
+            else:
+                # Random randint is inclusive of both end points!
+                top_k = random.randint(1, self.pool_size) if self.prompt_size == -1 else self.prompt_size
+            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=top_k)  # Select relevant prompts
             inputs_embeds = torch.cat([selected_prompts, inputs_embeds], dim=1)
         else:
             batch_size = inputs_embeds.size(0)
@@ -494,8 +510,8 @@ class SALMONN(nn.Module):
         
         diversity_loss = 0.0
         if self.use_soft_prompting or self.l2p:
-            num_tokens = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
-            inputs_embeds, diversity_loss, _ = self.inject_soft_prompt(inputs_embeds, speech_embeds.mean(1))
+            inputs_embeds, diversity_loss, token_indices = self.inject_soft_prompt(inputs_embeds, speech_embeds.mean(1), inference=False)
+            num_tokens = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
             soft_prompt_mask = torch.ones(
                 inputs_embeds.shape[0], num_tokens, device=inputs_embeds.device, dtype=attention_mask.dtype
             )  # Create an attention mask for the soft prompts
@@ -555,10 +571,10 @@ class SALMONN(nn.Module):
         attns = torch.cat([atts_bos, speech_atts], dim=1)
         
         token_indices = None
-        if self.use_soft_prompting or self.l2p:
-            embeds, _, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1))
+        if self.use_soft_prompting or self.l2p: 
+            embeds, _, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1), inference=True)
             
-            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
+            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
             
             # Create a soft prompt attention mask (all ones)
             soft_prompt_mask = torch.ones(
@@ -629,6 +645,7 @@ class SALMONN(nn.Module):
         device_8bit = config.get("device_8bit", 0)
         
         lambda_diversity = config.get("lambda_diversity", 1.0)
+        p = config.get("p", 0.1)
         
         model = cls(
             llama_model_name=llama_model_name,
@@ -662,6 +679,7 @@ class SALMONN(nn.Module):
             low_resource=low_resource,
             device_8bit=device_8bit,
             lambda_diversity=lambda_diversity,
+            p = p,
         )
 
         ckpt_path = config.get("ckpt", "")
