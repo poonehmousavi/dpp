@@ -87,8 +87,26 @@ class Runner:
 
         # dataloaders
         self.train_loader = get_dataloader(datasets["train"], self.config.config.run, is_train=True, use_distributed=self.use_distributed)
-        self.valid_loader = get_dataloader(datasets["valid"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
-        self.test_loader = get_dataloader(datasets["test"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
+        # self.valid_loader = get_dataloader(datasets["valid"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
+        # self.test_loader = get_dataloader(datasets["test"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
+        
+        if isinstance(datasets["valid"], dict):
+            self.valid_loaders = {
+                name: get_dataloader(ds, self.config.config.run, is_train=False, use_distributed=self.use_distributed)
+                for name, ds in datasets["valid"].items()
+            }
+        else:
+            self.valid_loader = get_dataloader(datasets["valid"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
+            
+        
+        if isinstance(datasets["test"], dict):
+            self.test_loaders = {
+                name: get_dataloader(ds, self.config.config.run, is_train=False, use_distributed=self.use_distributed)
+                for name, ds in datasets["test"].items()
+            }
+        else:
+            self.test_loader = get_dataloader(datasets["test"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
+
 
         # scaler
         self.use_amp = self.config.config.run.get("amp", False)
@@ -197,13 +215,13 @@ class Runner:
 
 
     @torch.no_grad()
-    def valid_epoch(self, epoch, split, save_json=False):
+    def valid_epoch(self, epoch, split, dataloader=None, dataset_name="", save_json=False):
         start_time = time.time()
         model = self.unwrap_dist_model(self.model)
         model.eval()
-
-        dataloader = getattr(self, f"{split}_loader", None)
-        assert dataloader is not None, f"{split}_loader does not exist."
+        
+        if dataloader is None:
+            dataloader = getattr(self, f"{split}_loader", None)
 
         metric_logger = MetricLogger(delimiter="  ")
         header = f"Eval: data epoch: [{epoch}]"
@@ -269,19 +287,51 @@ class Runner:
                 break
             
         print("Token use Counts:", token_use_counts)
-        # After the loop, plot and save the histogram of token usage.
-        # (Only the main process should handle file writing.)
-        if is_main_process():
-            fig, ax = plt.subplots(figsize=(8, 6))
-            ax.bar(np.arange(num_tokens), token_use_counts, color='skyblue')
+        # # After the loop, plot and save the histogram of token usage.
+        # # (Only the main process should handle file writing.)
+        # if is_main_process():
+        #     fig, ax = plt.subplots(figsize=(8, 6))
+        #     ax.bar(np.arange(num_tokens), sorted(token_use_counts), color='skyblue')
+        #     ax.set_xlabel("Prompt Token Index")
+        #     ax.set_ylabel("Selection Count")
+        #     ax.set_title(f"L2P Prompt Token Usage Histogram (Epoch {epoch})")
+        #     ax.grid(True, linestyle='--', alpha=0.6)  # Add grid with dashed lines
+        #     pdf_path = os.path.join(self.output_dir, f"l2p_usage_epoch_{epoch}.pdf")
+        #     fig.savefig(pdf_path)
+        #     plt.close(fig)
+        #     logging.info(f"L2P usage histogram saved to {pdf_path}")
+
+        if not hasattr(self, "token_use_counts_by_dataset"):
+            self.token_use_counts_by_dataset = {}
+
+        self.token_use_counts_by_dataset[dataset_name] = token_use_counts
+
+        # After all datasets are processed, plot the combined histogram
+        if is_main_process() and len(self.token_use_counts_by_dataset) == len(self.valid_loaders):
+            fig, ax = plt.subplots(figsize=(10, 6))
+            num_tokens = len(next(iter(self.token_use_counts_by_dataset.values())))
+
+            # Plot token use counts for each dataset
+            width = 0.2  # Adjust bar width for visibility
+            x = np.arange(num_tokens)  # Token indices
+            colors = ["blue", "red", "green"]  # Different colors for each dataset
+            alpha = 0.6  # Transparency for overlap visualization
+            num_datasets = len(self.token_use_counts_by_dataset)
+
+            for i, ((ds_name, counts), color) in enumerate(zip(self.token_use_counts_by_dataset.items(), colors)):
+                ax.bar(x + (i - num_datasets / 2) * width, counts, width=width, alpha=alpha, label=ds_name, color=color, edgecolor="black")
+
             ax.set_xlabel("Prompt Token Index")
             ax.set_ylabel("Selection Count")
             ax.set_title(f"L2P Prompt Token Usage Histogram (Epoch {epoch})")
+            ax.legend()
+            ax.grid(True, linestyle="--", alpha=0.6)
             pdf_path = os.path.join(self.output_dir, f"l2p_usage_epoch_{epoch}.pdf")
             fig.savefig(pdf_path)
             plt.close(fig)
             logging.info(f"L2P usage histogram saved to {pdf_path}")
-
+            self.token_use_counts_by_dataset = {}
+            
         # **Compute Corpus-Level BLEU Score**
         bleu_start_time = time.time()
         bleu_score = bleu_metric.compute(predictions=all_hypotheses, references=[[ref] for ref in all_references])["bleu"]
@@ -320,6 +370,7 @@ class Runner:
 
 
         total_validation_time = time.time() - start_time
+        logging.info(f"\n Dataset Name: {dataset_name}")
         logging.info(f"\n[Validation Completed] Epoch {epoch}")
         logging.info(f" - BLEU computation time: {bleu_time:.2f} seconds")
         logging.info(f" - ROUGE computation time: {rouge_time:.2f} seconds")
@@ -333,16 +384,17 @@ class Runner:
         
         # **Save JSON if needed**
         if save_json and is_main_process():
-            self.save_result(results, self.output_dir, f"eval_{split}_epoch_{epoch}")
+            self.save_result(results, self.output_dir, f"eval_{split}_epoch_{epoch}_{dataset_name}")
 
+        header = dataset_name if dataset_name else "val"
         # **Log Results to WandB**
         if is_main_process():
             wandb.log({
-                "val/mean_exact_match": mean_exact,
-                "val/mean_bleu_score": mean_bleu,
-                "val/mean_rougeL_score": mean_rouge,
-                "val/mean_rouge4_score": mean_rouge4,
-                "val/mean_wer_score": mean_wer,
+                f"{header}/mean_exact_match": mean_exact,
+                f"{header}/mean_bleu_score": mean_bleu,
+                f"{header}/mean_rougeL_score": mean_rouge,
+                f"{header}/mean_rouge4_score": mean_rouge4,
+                f"{header}/mean_wer_score": mean_wer,
                 "epoch": epoch
             })
 
@@ -399,7 +451,11 @@ class Runner:
         best_epoch = 0
 
         set_verbosity_error()
-        valid_log = self.valid_epoch(0, "valid", save_json=True)
+        if hasattr(self, 'valid_loaders'):
+                for ds_name, loader in self.valid_loaders.items():
+                    valid_log = self.valid_epoch(0, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
+        else:
+            valid_log = self.valid_epoch(0, "valid", save_json=True)
         for cur_epoch in range(self.start_epoch, self.max_epoch):
             if self.evaluate_only:
                 break
@@ -410,20 +466,47 @@ class Runner:
             self.log_stats(train_stats, split_name="train")
 
             # validating phase
+            # logging.info("Validating Phase")
+            # set_verbosity_error()
+            # valid_log = self.valid_epoch(cur_epoch+1, "valid", save_json=True)
+            # if valid_log is not None:
+            #     if is_main_process():
+            #         agg_metrics = valid_log["mean_bleu_score"]
+            #         if agg_metrics > best_agg_metric:
+            #             best_agg_metric = agg_metrics
+            #             best_epoch = cur_epoch
+
+            #             self.save_checkpoint(cur_epoch, is_best=True)
+
+            #         valid_log.update({"best_epoch": best_epoch})
+            #         self.log_stats(valid_log, split_name="valid")
+            
             logging.info("Validating Phase")
             set_verbosity_error()
-            valid_log = self.valid_epoch(cur_epoch+1, "valid", save_json=True)
-            if valid_log is not None:
-                if is_main_process():
-                    agg_metrics = valid_log["mean_bleu_score"]
-                    if agg_metrics > best_agg_metric:
-                        best_agg_metric = agg_metrics
-                        best_epoch = cur_epoch
-
-                        self.save_checkpoint(cur_epoch, is_best=True)
-
-                    valid_log.update({"best_epoch": best_epoch})
+            if hasattr(self, 'valid_loaders'):
+                for ds_name, loader in self.valid_loaders.items():
+                    valid_log = self.valid_epoch(cur_epoch+1, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
+                    # Prefix the metric names with the dataset name
+                    valid_log = {f"{ds_name}_{k}": v for k, v in valid_log.items()}
                     self.log_stats(valid_log, split_name="valid")
+                    # Optionally, use one of the metrics (say from "librisqa") for checkpointing
+                    if ds_name == "librisqa":
+                        agg_metrics = valid_log.get("libriasr_mean_bleu_score", 0)
+                        if agg_metrics > best_agg_metric:
+                            best_agg_metric = agg_metrics
+                            best_epoch = cur_epoch
+                            self.save_checkpoint(cur_epoch, is_best=True)
+            else:
+                valid_log = self.valid_epoch(cur_epoch+1, "valid", save_json=True)
+                if valid_log is not None:
+                    if is_main_process():
+                        agg_metrics = valid_log["mean_bleu_score"]
+                        if agg_metrics > best_agg_metric:
+                            best_agg_metric = agg_metrics
+                            best_epoch = cur_epoch
+                            self.save_checkpoint(cur_epoch, is_best=True)
+                        valid_log.update({"best_epoch": best_epoch})
+                        self.log_stats(valid_log, split_name="valid")
 
             self.save_checkpoint(cur_epoch, is_best=False)
 

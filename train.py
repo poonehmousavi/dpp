@@ -25,6 +25,8 @@ from dist_utils import get_rank, init_distributed_mode
 from models import load_model
 from dataset import SALMONNDataset
 from runner import Runner
+from torch.utils.data import ConcatDataset
+
 
 
 def parse_args():
@@ -81,7 +83,10 @@ def get_paths(dataset_name):
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/clotho/",
         }    
     
-
+class ConcatDatasetWithCollater(ConcatDataset):
+    def __init__(self, datasets):
+        super().__init__(datasets)
+        self.collater = datasets[0].collater
 
 def main():
     # set before init_distributed_mode() to ensure the same job_id shared across all ranks.
@@ -104,14 +109,35 @@ def main():
     # build model
     model = load_model(model_config)
     
-    dataset_paths = get_paths(data_config.dataset)
+    # dataset_paths = get_paths(data_config.dataset)
 
-    # build datasets
+    # # build datasets
+    # datasets = {
+    #     "train": SALMONNDataset(dataset_paths["train"], data_config.whisper_path, dataset_paths["data_root"]),
+    #     "valid": SALMONNDataset(dataset_paths["valid"], data_config.whisper_path, dataset_paths["data_root"]),
+    #     "test": SALMONNDataset(dataset_paths["test"], data_config.whisper_path, dataset_paths["data_root"]),
+    # }
+    
+    dataset_names = ["libriasr", "librisqa", "er"]
+    train_datasets = []
+    valid_datasets = {}
+    test_datasets = {}
+    print("Loading datasets")
+    
+    for ds in dataset_names:
+        print(f"Loading {ds}")
+        paths = get_paths(ds)
+        train_datasets.append(SALMONNDataset(paths["train"], data_config.whisper_path, paths["data_root"]))
+        valid_datasets[ds] = SALMONNDataset(paths["valid"], data_config.whisper_path, paths["data_root"])
+        test_datasets[ds] = SALMONNDataset(paths["test"], data_config.whisper_path, paths["data_root"])
+
     datasets = {
-        "train": SALMONNDataset(dataset_paths["train"], data_config.whisper_path, dataset_paths["data_root"]),
-        "valid": SALMONNDataset(dataset_paths["valid"], data_config.whisper_path, dataset_paths["data_root"]),
-        "test": SALMONNDataset(dataset_paths["test"], data_config.whisper_path, dataset_paths["data_root"]),
+        "train": ConcatDatasetWithCollater(train_datasets),  # train on all datasets together
+        "valid": valid_datasets,                 # separate valid sets per dataset
+        "test": test_datasets,                   # same for test
     }
+    
+    print(f"Finished loading. Lengths: train: {len(datasets['train'])}, val: {len(datasets['valid'])}, test: {len(datasets['test'])}")
 
     # build runner
     runner = Runner(cfg, model, datasets, job_id)
