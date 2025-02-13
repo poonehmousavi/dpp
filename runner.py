@@ -7,6 +7,7 @@ import datetime
 from pathlib import Path
 import logging
 import wandb
+import yaml
 
 import evaluate
 
@@ -23,6 +24,9 @@ from logger import MetricLogger, SmoothedValue
 from utils import get_dataloader, prepare_sample
 from optims import get_optimizer, LinearWarmupCosineLRScheduler
 from transformers.utils.logging import set_verbosity_error
+import matplotlib.pyplot as plt
+import numpy as np
+
 
 def clean_text(text):
     """Lowercases, removes punctuation, and strips extra spaces."""
@@ -40,6 +44,11 @@ class Runner:
         self.output_dir = Path(self.config.config.run.output_dir) / job_id
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.log_writter = SummaryWriter(self.output_dir)
+        
+        # Save config to a YAML file so it can be used later to load checkpoints.
+        config_path = self.output_dir / "config.yaml"
+        with open(config_path, "w") as f:
+            yaml.dump(self.config.to_dict(), f, default_flow_style=False)
 
         # settings
         self.device = torch.device(self.config.config.run.device)
@@ -209,13 +218,20 @@ class Runner:
         total_correct = torch.tensor(0, dtype=torch.float32, device=self.device)  # Exact match
         
         valid_iters = 0
+        
+        num_tokens = model.pool_size if model.l2p else model.num_soft_prompt_tokens
+        token_use_counts = [0] * num_tokens
 
         for samples in metric_logger.log_every(dataloader, self.config.config.run.log_freq, header=header):
             samples = prepare_sample(samples, cuda_enabled=self.cuda_enabled)
             prompts = [self.test_prompt_dict[task] for task in samples["task"]]
 
             with torch.cuda.amp.autocast(enabled=self.use_amp):
-                generated_texts = model.generate(samples, self.config.config.run, prompts=prompts)
+                generated_texts, token_indices = model.generate(samples, self.config.config.run, prompts=prompts, return_token_indices=True)
+                if token_indices is not None:
+                    for token in token_indices.view(-1).tolist():
+                        token_use_counts[token] += 1
+                        
                 ground_truths = samples["text"]
 
                 # Preprocess both ground truth and generated text
@@ -246,6 +262,20 @@ class Runner:
             valid_iters += 1
             if self.config.config.run.num_valid_iters and valid_iters >= self.config.config.run.num_valid_iters:
                 break
+            
+        print("Token use Counts:", token_use_counts)
+        # After the loop, plot and save the histogram of token usage.
+        # (Only the main process should handle file writing.)
+        if is_main_process():
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.bar(np.arange(num_tokens), token_use_counts, color='skyblue')
+            ax.set_xlabel("Prompt Token Index")
+            ax.set_ylabel("Selection Count")
+            ax.set_title(f"L2P Prompt Token Usage Histogram (Epoch {epoch})")
+            pdf_path = os.path.join(self.output_dir, f"l2p_usage_epoch_{epoch}.pdf")
+            fig.savefig(pdf_path)
+            plt.close(fig)
+            logging.info(f"L2P usage histogram saved to {pdf_path}")
 
         # **Compute Corpus-Level BLEU Score**
         bleu_start_time = time.time()
@@ -396,12 +426,12 @@ class Runner:
                 dist.barrier()
 
         # testing phase
-        if self.evaluate_only:
-            test_log = self.valid_epoch("best", "test", save_json=True)
-            if is_main_process():
-                wandb.log({
-                    "test/loss": test_log.get("loss", 0), 
-                    "test/accuracy": test_log.get("agg_metrics", 0)})
+        # if self.evaluate_only:
+        #     test_log = self.valid_epoch("best", "test", save_json=True)
+        #     if is_main_process():
+        #         wandb.log({
+        #             "test/loss": test_log.get("loss", 0), 
+        #             "test/accuracy": test_log.get("agg_metrics", 0)})
 
 
         total_time = time.time() - start_time
@@ -447,5 +477,6 @@ class Runner:
             self.output_dir,
             "checkpoint_{}.pth".format("best" if is_best else cur_epoch),
         )
+    
         logging.info("Saving checkpoint at epoch {} to {}.".format(cur_epoch, save_to))
         torch.save(save_obj, save_to)
