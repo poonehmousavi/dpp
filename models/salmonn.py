@@ -379,13 +379,17 @@ class SALMONN(nn.Module):
 
         return self._encode_auditory_feature(speech_embeds, audio_embeds=audio_embeds)
     
-    def inject_soft_prompt(self, inputs_embeds, input_representations=None):
+    def inject_soft_prompt(self, inputs_embeds, input_representations=None, inference=False):
         """
         Injects soft prompts into the input embeddings. Supports both fixed and L2P-style soft prompts.
         """
         if self.l2p:
             assert input_representations is not None, "Input representations are required for L2P."
-            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=self.prompt_size)  # Select relevant prompts
+            if inference:
+                top_k = self.pool_size // 2  # deterministic at inference
+            else:
+                top_k = random.randint(1, self.pool_size + 1) if self.prompt_size == -1 else self.prompt_size
+            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=top_k)  # Select relevant prompts
             inputs_embeds = torch.cat([selected_prompts, inputs_embeds], dim=1)
         else:
             batch_size = inputs_embeds.size(0)
@@ -494,8 +498,8 @@ class SALMONN(nn.Module):
         
         diversity_loss = 0.0
         if self.use_soft_prompting or self.l2p:
-            num_tokens = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
-            inputs_embeds, diversity_loss, _ = self.inject_soft_prompt(inputs_embeds, speech_embeds.mean(1))
+            inputs_embeds, diversity_loss, token_indices = self.inject_soft_prompt(inputs_embeds, speech_embeds.mean(1), inference=False)
+            num_tokens = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
             soft_prompt_mask = torch.ones(
                 inputs_embeds.shape[0], num_tokens, device=inputs_embeds.device, dtype=attention_mask.dtype
             )  # Create an attention mask for the soft prompts
@@ -555,10 +559,10 @@ class SALMONN(nn.Module):
         attns = torch.cat([atts_bos, speech_atts], dim=1)
         
         token_indices = None
-        if self.use_soft_prompting or self.l2p:
-            embeds, _, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1))
+        if self.use_soft_prompting or self.l2p: 
+            embeds, _, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1), inference=True)
             
-            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
+            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
             
             # Create a soft prompt attention mask (all ones)
             soft_prompt_mask = torch.ones(
