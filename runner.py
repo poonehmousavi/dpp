@@ -156,7 +156,8 @@ class Runner:
             self.scheduler.step(cur_epoch=epoch, cur_step=i)
 
             with torch.cuda.amp.autocast(enabled=self.use_amp):
-                loss = self.model(samples)["loss"]
+                model_output = self.model(samples)
+                loss = model_output["loss"]
 
             if self.use_amp:
                 self.scaler.scale(loss).backward()
@@ -176,11 +177,16 @@ class Runner:
             
             # Log training metrics to wandb
             if is_main_process():
-                wandb.log({
-                    "train/loss": loss.item(),
-                    "learning_rate": self.optimizer.param_groups[0]["lr"], 
-                    "epoch": epoch, 
-                    "iteration": i})
+                if i % self.config.config.run.wandb_report_every == 0:
+                    wandb.log({
+                        "train/llm_loss": model_output.get("llm_loss", loss).item(),
+                        "train/diversity_loss": model_output.get("diversity_loss", 0),
+                        "train/combined_loss": model_output.get("combined_loss", loss).item(),
+                        "train/loss": loss.item(),
+                        "learning_rate": self.optimizer.param_groups[0]["lr"], 
+                        "epoch": epoch, 
+                        "iteration": i
+                    })
 
 
         metric_logger.synchronize_between_processes()
