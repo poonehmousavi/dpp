@@ -181,8 +181,7 @@ class Runner:
                     wandb.log({
                         "train/llm_loss": model_output.get("llm_loss", loss).item(),
                         "train/diversity_loss": model_output.get("diversity_loss", 0),
-                        "train/combined_loss": model_output.get("combined_loss", loss).item(),
-                        "train/loss": loss.item(),
+                        "train/loss": model_output.get("combined_loss", loss).item(),
                         "learning_rate": self.optimizer.param_groups[0]["lr"], 
                         "epoch": epoch, 
                         "iteration": i
@@ -233,7 +232,7 @@ class Runner:
             prompts = [self.test_prompt_dict[task] for task in samples["task"]]
 
             with torch.cuda.amp.autocast(enabled=self.use_amp):
-                generated_texts, token_indices = model.generate(samples, self.config.config.run, prompts=prompts, return_token_indices=True)
+                generated_texts, token_indices = model.generate(samples, self.config.config.run, prompts=prompts)
                 if token_indices is not None:
                     for token in token_indices.view(-1).tolist():
                         token_use_counts[token] += 1

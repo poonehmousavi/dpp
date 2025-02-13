@@ -176,6 +176,8 @@ class SALMONN(nn.Module):
             cache_dir=cache_dir
         )
         
+        self.stop_word_id = torch.tensor([self.llama_tokenizer.encode(self.end_sym, add_special_tokens=False)[0]])
+        
         logging.info('Loading LLaMA Model')
         if self.low_resource:
             self.llama_model = AutoModelForCausalLM.from_pretrained(
@@ -383,7 +385,7 @@ class SALMONN(nn.Module):
         """
         if self.l2p:
             assert input_representations is not None, "Input representations are required for L2P."
-            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=self.prompt_size, return_indices=True)  # Select relevant prompts
+            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=self.prompt_size)  # Select relevant prompts
             inputs_embeds = torch.cat([selected_prompts, inputs_embeds], dim=1)
         else:
             batch_size = inputs_embeds.size(0)
@@ -529,7 +531,7 @@ class SALMONN(nn.Module):
         return {"loss": combined_loss, "llm_loss": llm_loss, "diversity_loss": diversity_loss}
 
 
-    def generate(self, samples, generate_cfg, prompts=None, return_token_indices=False):
+    def generate(self, samples, generate_cfg, prompts=None):
         batch_size = samples["spectrogram"].shape[0]
 
         spectrogram = samples["spectrogram"]
@@ -554,7 +556,7 @@ class SALMONN(nn.Module):
         
         token_indices = None
         if self.use_soft_prompting or self.l2p:
-            embeds, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1))
+            embeds, _, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1))
             
             num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
             
@@ -567,7 +569,7 @@ class SALMONN(nn.Module):
             # Prepend the soft prompt mask to the existing attention mask
             attns = torch.cat([soft_prompt_mask, attns], dim=1)
 
-        stop_words_ids = [torch.tensor([2]).cuda()]  
+        stop_words_ids = [self.stop_word_id.cuda()]  
         stopping_criteria = StoppingCriteriaList([StoppingCriteriaSub(stops=stop_words_ids)])
         outputs = self.llama_model.generate(
             inputs_embeds=embeds,
@@ -584,9 +586,7 @@ class SALMONN(nn.Module):
         )
         text = self.llama_tokenizer.batch_decode(outputs, add_special_tokens=False, skip_special_tokens=True)
 
-        if return_token_indices:
-            return text, token_indices
-        return text
+        return text, token_indices
 
     @classmethod
     def from_config(cls, config):
