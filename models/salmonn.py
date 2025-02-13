@@ -67,7 +67,7 @@ class PromptPool(nn.Module):
         selected_prompts = self.prompt_values[topk_indices]  # [B, top_k, prompt_dim]
         
         # Compute diversity loss as the sum of the top-k similarity values, averaged over the batch
-        diversity_loss = topk_values.sum(dim=1).mean()
+        diversity_loss = - topk_values.sum(dim=1).mean()
         
         selected_prompts = self.prompt_values[topk_indices]  # [batch_size, top_k, prompt_dim]
             
@@ -386,7 +386,7 @@ class SALMONN(nn.Module):
         if self.l2p:
             assert input_representations is not None, "Input representations are required for L2P."
             if inference:
-                top_k = self.pool_size // 2  # deterministic at inference
+                top_k = int(0.4 * self.pool_size)  # deterministic at inference
             else:
                 # Random randint is inclusive of both end points!
                 top_k = random.randint(1, self.pool_size) if self.prompt_size == -1 else self.prompt_size
