@@ -30,7 +30,7 @@ from .beats.BEATs import BEATsConfig, BEATs
 from .utils import StoppingCriteriaSub
 
 class PromptPool(nn.Module):
-    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None):
+    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1):
         super().__init__()
         self.num_prompts = num_prompts
         
@@ -43,8 +43,17 @@ class PromptPool(nn.Module):
         else:
             self.prompt_values = nn.Parameter(torch.randn(num_prompts, prompt_dim))
             
+        self.dropout = None
+        if p > 0:
+            self.dropout = torch.nn.Dropout(p)
+            
+    def compute_cosine_similarity(self, input_embedding):
+        """Compute cosine similarities between normalized input_embedding and prompt keys."""
+        norm_input = F.normalize(input_embedding, dim=-1)       # [B, prompt_dim]
+        norm_keys = F.normalize(self.prompt_keys, dim=-1)         # [num_prompts, prompt_dim]
+        return torch.matmul(norm_input, norm_keys.T)              # [B, num_prompts]
 
-    def forward(self, input_embedding, top_k=5, return_indices=False):
+    def forward(self, input_embedding, top_k=5):
         """
         Selects the top-k relevant prompts based on similarity with the input.
         Arguments:
@@ -52,17 +61,25 @@ class PromptPool(nn.Module):
         - top_k: Number of prompts to select
         """
         # Compute similarities between input and prompt keys
-        similarities = torch.matmul(input_embedding, self.prompt_keys.T)  # [batch_size, num_prompts]
-
-        topk_indices = torch.topk(similarities, top_k, dim=1).indices  # Get top-k prompt indices
-
-        # Gather the selected prompts in a vectorized manner
-        assert (topk_indices >= 0).all() and (topk_indices < self.prompt_values.size(0)).all(), "Index out of bounds!"
-
+        similarities = self.compute_cosine_similarity(input_embedding)  # [batch_size, num_prompts]
+            
+        normalized_similarities = F.softmax(similarities, dim=1)
+        if self.dropout is not None:
+            normalized_similarities = self.dropout(normalized_similarities)
+            normalized_similarities = F.softmax(similarities, dim=1)
+            
+        # Select top-k indices and corresponding values
+        topk_values, topk_indices = torch.topk(normalized_similarities, top_k, dim=1)
+        
+        # Gather the selected prompt values
+        selected_prompts = self.prompt_values[topk_indices]  # [B, top_k, prompt_dim]
+        
+        # Compute diversity loss as the sum of the top-k similarity values, averaged over the batch
+        diversity_loss = - topk_values.sum(dim=1).mean()
+        
         selected_prompts = self.prompt_values[topk_indices]  # [batch_size, top_k, prompt_dim]
-        if return_indices:
-            return selected_prompts, topk_indices
-        return selected_prompts
+            
+        return selected_prompts, diversity_loss, topk_indices
     
     
 class SALMONN(nn.Module):
@@ -126,6 +143,9 @@ class SALMONN(nn.Module):
         l2p=False,
         pool_size=30,
         prompt_size=10,
+        p = 0.1,
+        
+        lambda_diversity=1.0,
 
         multi_prompt=False,
         prompt_path="",
@@ -154,6 +174,9 @@ class SALMONN(nn.Module):
         self.l2p=l2p
         self.pool_size=pool_size
         self.prompt_size=prompt_size
+        self.p = p
+        
+        self.lambda_diversity = lambda_diversity
         
         print(pool_size, type(pool_size))
 
@@ -162,6 +185,8 @@ class SALMONN(nn.Module):
             llama_model_name,
             cache_dir=cache_dir
         )
+        
+        self.stop_word_id = torch.tensor([self.llama_tokenizer.encode(self.end_sym, add_special_tokens=False)[0]])
         
         logging.info('Loading LLaMA Model')
         if self.low_resource:
@@ -223,7 +248,8 @@ class SALMONN(nn.Module):
                 self.prompt_pool = PromptPool(
                     num_prompts=self.pool_size,
                     prompt_dim=base_embedding_mean.shape[-1],
-                    model_input_embeds=base_embedding_mean.unsqueeze(0) + noise)
+                    model_input_embeds=base_embedding_mean.unsqueeze(0) + noise,
+                    p = self.p)
             num_trainable_params = self.pool_size * base_embedding_mean.shape[-1]
             total_params = sum(p.numel() for p in self.llama_model.parameters()) + num_trainable_params
 
@@ -364,20 +390,26 @@ class SALMONN(nn.Module):
 
         return self._encode_auditory_feature(speech_embeds, audio_embeds=audio_embeds)
     
-    def inject_soft_prompt(self, inputs_embeds, input_representations=None):
+    def inject_soft_prompt(self, inputs_embeds, input_representations=None, inference=False):
         """
         Injects soft prompts into the input embeddings. Supports both fixed and L2P-style soft prompts.
         """
         if self.l2p:
             assert input_representations is not None, "Input representations are required for L2P."
-            selected_prompts, token_indices = self.prompt_pool(input_representations, top_k=self.prompt_size, return_indices=True)  # Select relevant prompts
+            if inference:
+                top_k = int(0.4 * self.pool_size)  # deterministic at inference
+            else:
+                # Random randint is inclusive of both end points!
+                top_k = random.randint(1, self.pool_size) if self.prompt_size == -1 else self.prompt_size
+            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=top_k)  # Select relevant prompts
             inputs_embeds = torch.cat([selected_prompts, inputs_embeds], dim=1)
         else:
             batch_size = inputs_embeds.size(0)
             soft_prompts = self.soft_prompt_embeddings.expand(batch_size, -1, -1)
             inputs_embeds = torch.cat([soft_prompts, inputs_embeds], dim=1)
             token_indices = torch.arange(0, self.num_soft_prompt_tokens)
-        return inputs_embeds, token_indices
+            diversity_loss = 0.0
+        return inputs_embeds, diversity_loss, token_indices
 
     def prompt_wrap(self, embeds, atts, prompt, multi_prompt=False):
         if prompt:
@@ -421,7 +453,7 @@ class SALMONN(nn.Module):
         else:
             return embeds, atts
 
-    def forward(self, samples, verbose=False):
+    def forward(self, samples):
         # detect whether there are multi tasks in this batch
         task = list(set(samples["task"]))
         if len(task) > 1 or "QA" in task:
@@ -476,9 +508,10 @@ class SALMONN(nn.Module):
         inputs_embeds = torch.cat([bos_embeds, speech_embeds, to_regress_embeds], dim=1)
         attention_mask = torch.cat([atts_bos, speech_atts, to_regress_tokens.attention_mask], dim=1)
         
+        diversity_loss = 0.0
         if self.use_soft_prompting or self.l2p:
-            num_tokens = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
-            inputs_embeds, _ = self.inject_soft_prompt(inputs_embeds, speech_embeds.mean(1))
+            inputs_embeds, diversity_loss, token_indices = self.inject_soft_prompt(inputs_embeds, speech_embeds.mean(1), inference=False)
+            num_tokens = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
             soft_prompt_mask = torch.ones(
                 inputs_embeds.shape[0], num_tokens, device=inputs_embeds.device, dtype=attention_mask.dtype
             )  # Create an attention mask for the soft prompts
@@ -503,20 +536,18 @@ class SALMONN(nn.Module):
                 return_dict=True,
                 labels=targets,
             )
-            loss = outputs.loss
+            llm_loss = outputs.loss
+            
+        # Combine losses if using L2P (diversity loss is 0 if not using L2P)
+        if self.l2p:
+            combined_loss = llm_loss + self.lambda_diversity * diversity_loss
+        else:
+            combined_loss = llm_loss
 
-        if verbose:
-            nvocab = self.llama_model.config.vocab_size
-            results = outputs.logits[:, empty_targets.size(1) - 1: -1, :].contiguous().view(-1, nvocab).argmax(dim=-1)
-            labels = targets[:, empty_targets.size(1):].contiguous().view(-1)
-            mask = (labels != -100)
-            correct = (results[mask] == labels[mask]).float().sum()
-            total = len(labels[mask])
-            return {"loss": loss, "correct": correct, "total": total}
+        return {"loss": combined_loss, "llm_loss": llm_loss, "diversity_loss": diversity_loss}
 
-        return {"loss": loss}
 
-    def generate(self, samples, generate_cfg, prompts=None, return_token_indices=False):
+    def generate(self, samples, generate_cfg, prompts=None):
         batch_size = samples["spectrogram"].shape[0]
 
         spectrogram = samples["spectrogram"]
@@ -540,10 +571,10 @@ class SALMONN(nn.Module):
         attns = torch.cat([atts_bos, speech_atts], dim=1)
         
         token_indices = None
-        if self.use_soft_prompting or self.l2p:
-            embeds, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1))
+        if self.use_soft_prompting or self.l2p: 
+            embeds, _, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1), inference=True)
             
-            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else self.prompt_size
+            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
             
             # Create a soft prompt attention mask (all ones)
             soft_prompt_mask = torch.ones(
@@ -554,7 +585,7 @@ class SALMONN(nn.Module):
             # Prepend the soft prompt mask to the existing attention mask
             attns = torch.cat([soft_prompt_mask, attns], dim=1)
 
-        stop_words_ids = [torch.tensor([2]).cuda()]  
+        stop_words_ids = [self.stop_word_id.cuda()]  
         stopping_criteria = StoppingCriteriaList([StoppingCriteriaSub(stops=stop_words_ids)])
         outputs = self.llama_model.generate(
             inputs_embeds=embeds,
@@ -571,9 +602,7 @@ class SALMONN(nn.Module):
         )
         text = self.llama_tokenizer.batch_decode(outputs, add_special_tokens=False, skip_special_tokens=True)
 
-        if return_token_indices:
-            return text, token_indices
-        return text
+        return text, token_indices
 
     @classmethod
     def from_config(cls, config):
@@ -615,6 +644,9 @@ class SALMONN(nn.Module):
         low_resource = config.get("low_resource", False)
         device_8bit = config.get("device_8bit", 0)
         
+        lambda_diversity = config.get("lambda_diversity", 1.0)
+        p = config.get("p", 0.1)
+        
         model = cls(
             llama_model_name=llama_model_name,
             cache_dir=cache_dir,
@@ -646,6 +678,8 @@ class SALMONN(nn.Module):
             end_sym=end_sym,
             low_resource=low_resource,
             device_8bit=device_8bit,
+            lambda_diversity=lambda_diversity,
+            p = p,
         )
 
         ckpt_path = config.get("ckpt", "")

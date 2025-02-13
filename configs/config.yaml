@@ -51,6 +51,7 @@ model:
   l2p: False
   pool_size: 30
   prompt_size: 10
+  p: 0.0
 
   multi_prompt: True
   prompt_template: "USER: {}\nASSISTANT:"
@@ -58,6 +59,8 @@ model:
   test_prompt_path: "prompts/test_prompt.json"
   max_txt_len: 300
   end_sym: "</s>"
+
+  lambda_diversity: 0.5
 
 datasets:
   # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap"
@@ -71,6 +74,7 @@ run:
   evaluate: False # if True, only evaluate model on test data
 
   valid_iters: 25
+  wandb_report_every: 500
 
   log_freq: 5
   epoch_based: False
