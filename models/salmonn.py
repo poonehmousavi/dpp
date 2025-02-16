@@ -90,7 +90,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class PromptPool(nn.Module):
-    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1, strategy="sim_strategy",residual_threshold=1e-3, attn_threshold=0.05):
+    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1, prompt_strategy="sim_strategy", similarity_method ="cosine", residual_threshold=1e-3, attn_threshold=0.05):
         """
         A prompt pool module that selects the most relevant prompts based on different strategies.
 
@@ -105,7 +105,8 @@ class PromptPool(nn.Module):
         """
         super().__init__()
         self.num_prompts = num_prompts
-        self.strategy = strategy  # Strategy to be used for selecting prompts
+        self.prompt_strategy = prompt_strategy  # Strategy to be used for selecting prompts
+        self.similarity_method = similarity_method
         self.residual_threshold = residual_threshold
         self.attn_threshold = attn_threshold  # Minimum attention weight for selecti
 
@@ -119,6 +120,25 @@ class PromptPool(nn.Module):
             self.prompt_values = nn.Parameter(torch.randn(num_prompts, prompt_dim))
             
         self.dropout = nn.Dropout(p) if p > 0 else None
+    
+    def sentence_transformer_similarity(self, input_texts):
+        """
+        Compute similarity using SentenceTransformer model.
+
+        Args:
+            input_texts (list of str): List of text inputs.
+
+        Returns:
+            torch.Tensor: Similarity scores [B, num_prompts].
+            torch.Tensor: Encoded input embeddings.
+        """
+        with torch.no_grad():
+            input_embeddings = self.sentence_transformer.encode(input_texts, convert_to_tensor=True)  # [B, 384]
+
+        # Compute similarities using SentenceTransformer's similarity function
+        similarities = self.sentence_transformer.similarity(input_embeddings, self.prompt_keys)  # [B, num_prompts]
+
+        return similarities
 
     def compute_cosine_similarity(self, input_embedding):
         """Compute cosine similarity between input and prompt keys."""
@@ -254,14 +274,21 @@ class PromptPool(nn.Module):
             diversity_loss (torch.Tensor): Diversity loss term.
             topk_indices (torch.Tensor): Indices of selected prompts.
         """
-        if self.strategy == "sim_strategy":
+        if self.similarity_method == "cosine":
+            return self.cosine_similarity(input_data), input_data
+        elif self.similarity_method == "sentence-transformer":
+            return self.sentence_transformer_similarity(input_data)
+        else:
+            raise ValueError(f"Unknown similarity method: {self.similarity_method}")
+
+        if self.prompt_strategy == "sim_strategy":
             return self.sim_strategy(input_embedding, top_k)
-        elif self.strategy == "residual_strategy":
+        elif self.prompt_strategy == "residual_strategy":
             return self.residual_strategy(input_embedding, top_k)
-        elif self.strategy == "att_strategy":
+        elif self.prompt_strategy == "att_strategy":
             return self.att_strategy(input_embedding)
         else:
-            raise NotImplementedError(f"Strategy '{self.strategy}' is not implemented.")
+            raise NotImplementedError(f"Strategy '{self.prompt_strategy}' is not implemented.")
 
 
     

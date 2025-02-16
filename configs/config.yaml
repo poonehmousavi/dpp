@@ -52,7 +52,8 @@ model:
   pool_size: 30
   prompt_size: 10
   p: 0.0
-  strategy: sim_strategy
+  prompt_strategy: sim_strategy
+  similarity_method: cosine
 
   multi_prompt: True
   prompt_template: "USER: {}\nASSISTANT:"
