@@ -70,13 +70,14 @@ class SALMONNDataset(Dataset):
         if len(audio.shape) == 2: # stereo to mono
             audio = audio[:, 0]
         if sr != 16000:
-            audio_tensor = torch.tensor(audio, dtype=torch.float32)
-            audio_tensor = torchaudio.functional.resample(audio_tensor, sr, 16000)
+            audio_tensor = torchaudio.transforms.Resample(
+                sr, 16000, dtype =torch.float64
+            )(torch.from_numpy(audio)).squeeze(0)
             audio = audio_tensor.numpy()
             sr = 16000
         if "expand_wav" in ann:
             for p in ann["expand_wav"]:
-                expand_audio, _ = sf.read(p)
+                expand_audio, _ = sf.read(p.replace("{data_root}", self.data_root))
                 if len(expand_audio.shape) == 2:
                     expand_audio = expand_audio[:, 0]
                 sil = np.zeros(1600, dtype=float)

@@ -83,6 +83,23 @@ def get_paths(dataset_name):
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/clotho/",
         }    
     
+    if dataset_name == "cv_trans":
+        return {
+            "train": "/home/toolkit/SALMONN/data/VoxcelebTrans/CoVoST2-En2Zh-train.json",
+            "test": "/home/toolkit/SALMONN/data/VoxcelebTrans/CoVoST2-En2Zh-test.json",
+            "valid": "/home/toolkit/SALMONN/data/VoxcelebTrans/CoVoST2-En2Zh-dev.json",
+            "data_root": "/mnt/dssk/data_rw/shubham/l2p/common_voice/clips",
+        } 
+        
+    
+    if dataset_name == "voxceleb_sv":
+        return {
+            "train": "/home/toolkit/SALMONN/data/VoxcelebSV/train-pair.json",
+            "test": "/home/toolkit/SALMONN/data/VoxcelebSV/test-pair.json",
+            "valid": "/home/toolkit/SALMONN/data/VoxcelebSV/dev-pair.json",
+            "data_root": "/mnt/dssk/data_rw/shubham/l2p/voxceleb/voxceleb1",
+        } 
+    
 class ConcatDatasetWithCollater(ConcatDataset):
     def __init__(self, datasets):
         super().__init__(datasets)
@@ -122,7 +139,7 @@ def main():
         }
         
     else:
-        dataset_names = ["libriasr", "librisqa", "er"]
+        dataset_names = ["libriasr", "librisqa", "er", "clotho_audio_cap", "cv_trans", "voxceleb_sv"]
         train_datasets = []
         valid_datasets = {}
         test_datasets = {}
