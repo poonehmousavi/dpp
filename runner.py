@@ -295,28 +295,8 @@ class Runner:
 
         # After all datasets are processed, plot the combined histogram
         if is_main_process() and len(self.token_use_counts_by_dataset) == n_datasets:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            num_tokens = len(next(iter(self.token_use_counts_by_dataset.values())))
-
-            # Plot token use counts for each dataset
-            width = 0.2  # Adjust bar width for visibility
-            x = np.arange(num_tokens)  # Token indices
-            colors = ["blue", "red", "green"]  # Different colors for each dataset
-            alpha = 0.6  # Transparency for overlap visualization
-            n_datasets = len(self.token_use_counts_by_dataset)
-
-            for i, ((ds_name, counts), color) in enumerate(zip(self.token_use_counts_by_dataset.items(), colors)):
-                ax.bar(x + (i - n_datasets / 2) * width, counts, width=width, alpha=alpha, label=ds_name, color=color)
-
-            ax.set_xlabel("Prompt Token Index")
-            ax.set_ylabel("Selection Count")
-            ax.set_title(f"L2P Prompt Token Usage Histogram (Epoch {epoch})")
-            ax.legend()
-            ax.grid(True, linestyle="--", alpha=0.6)
-            pdf_path = os.path.join(self.output_dir, f"l2p_usage_epoch_{epoch}.pdf")
-            fig.savefig(pdf_path)
-            plt.close(fig)
-            logging.info(f"L2P usage histogram saved to {pdf_path}")
+            with open(os.path.join(self.output_dir, "token_use_counts.json"), "w") as f:
+                json.dump(self.token_use_counts_by_dataset, f, indent=4)
             self.token_use_counts_by_dataset = {}
             
         # **Compute Corpus-Level BLEU Score**

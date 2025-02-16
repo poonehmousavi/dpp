@@ -64,7 +64,7 @@ model:
 
 datasets:
   # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap"
-  dataset: "libriasr"
+  dataset: "multitask"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
 
 run:
