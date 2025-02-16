@@ -29,58 +29,241 @@ from .modeling_whisper import WhisperModel
 from .beats.BEATs import BEATsConfig, BEATs
 from .utils import StoppingCriteriaSub
 
+# class PromptPool(nn.Module):
+#     def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1):
+#         super().__init__()
+#         self.num_prompts = num_prompts
+        
+#         # Initialize keys with small random values
+#         self.prompt_keys = nn.Parameter(torch.randn(num_prompts, prompt_dim) * 0.01)  # Learnable keys
+        
+#         # Initialize values based on model input embeddings mean plus noise
+#         if model_input_embeds is not None:
+#             self.prompt_values = nn.Parameter(model_input_embeds)
+#         else:
+#             self.prompt_values = nn.Parameter(torch.randn(num_prompts, prompt_dim))
+            
+#         self.dropout = None
+#         if p > 0:
+#             self.dropout = torch.nn.Dropout(p)
+            
+#     def compute_cosine_similarity(self, input_embedding):
+#         """Compute cosine similarities between normalized input_embedding and prompt keys."""
+#         norm_input = F.normalize(input_embedding, dim=-1)       # [B, prompt_dim]
+#         norm_keys = F.normalize(self.prompt_keys, dim=-1)         # [num_prompts, prompt_dim]
+#         return torch.matmul(norm_input, norm_keys.T)              # [B, num_prompts]
+
+#     def forward(self, input_embedding, top_k=5):
+#         """
+#         Selects the top-k relevant prompts based on similarity with the input.
+#         Arguments:
+#         - input_embedding: [batch_size, hidden_dim]
+#         - top_k: Number of prompts to select
+#         """
+#         # Compute similarities between input and prompt keys
+#         similarities = self.compute_cosine_similarity(input_embedding)  # [batch_size, num_prompts]
+            
+#         normalized_similarities = F.softmax(similarities, dim=1)
+#         if self.dropout is not None:
+#             normalized_similarities = self.dropout(normalized_similarities)
+#             normalized_similarities = F.softmax(similarities, dim=1)
+            
+#         # Select top-k indices and corresponding values
+#         topk_values, topk_indices = torch.topk(normalized_similarities, top_k, dim=1)
+        
+#         # Gather the selected prompt values
+#         selected_prompts = self.prompt_values[topk_indices]  # [B, top_k, prompt_dim]
+        
+#         # Compute diversity loss as the sum of the top-k similarity values, averaged over the batch
+#         diversity_loss = - topk_values.sum(dim=1).mean()
+        
+#         selected_prompts = self.prompt_values[topk_indices]  # [batch_size, top_k, prompt_dim]
+            
+#         return selected_prompts, diversity_loss, topk_indices
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 class PromptPool(nn.Module):
-    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1):
+    def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1, strategy="sim_strategy",residual_threshold=1e-3, attn_threshold=0.05):
+        """
+        A prompt pool module that selects the most relevant prompts based on different strategies.
+
+        Args:
+            num_prompts (int): Number of available prompts.
+            prompt_dim (int): Dimensionality of the prompts.
+            model_input_embeds (torch.Tensor, optional): Pretrained prompt values. Defaults to None.
+            p (float): Dropout probability.
+            strategy (str): Strategy for selecting prompts. Defaults to "sim_strategy".
+            residual_threshold (float): Threshold for stopping residual updates in residual_strategy.
+            attn_threshold (float): Threshold for discarding low attention prompts in att_strategy.
+        """
         super().__init__()
         self.num_prompts = num_prompts
+        self.strategy = strategy  # Strategy to be used for selecting prompts
+        self.residual_threshold = residual_threshold
+        self.attn_threshold = attn_threshold  # Minimum attention weight for selecti
+
+        # Learnable keys
+        self.prompt_keys = nn.Parameter(torch.randn(num_prompts, prompt_dim) * 0.01)
         
-        # Initialize keys with small random values
-        self.prompt_keys = nn.Parameter(torch.randn(num_prompts, prompt_dim) * 0.01)  # Learnable keys
-        
-        # Initialize values based on model input embeddings mean plus noise
+        # Initialize values
         if model_input_embeds is not None:
             self.prompt_values = nn.Parameter(model_input_embeds)
         else:
             self.prompt_values = nn.Parameter(torch.randn(num_prompts, prompt_dim))
             
-        self.dropout = None
-        if p > 0:
-            self.dropout = torch.nn.Dropout(p)
-            
+        self.dropout = nn.Dropout(p) if p > 0 else None
+
     def compute_cosine_similarity(self, input_embedding):
-        """Compute cosine similarities between normalized input_embedding and prompt keys."""
+        """Compute cosine similarity between input and prompt keys."""
         norm_input = F.normalize(input_embedding, dim=-1)       # [B, prompt_dim]
-        norm_keys = F.normalize(self.prompt_keys, dim=-1)         # [num_prompts, prompt_dim]
-        return torch.matmul(norm_input, norm_keys.T)              # [B, num_prompts]
+        norm_keys = F.normalize(self.prompt_keys, dim=-1)       # [num_prompts, prompt_dim]
+        return torch.matmul(norm_input, norm_keys.T)            # [B, num_prompts]
+
+    def sim_strategy(self, input_embedding, top_k=5):
+        """
+        Similarity-based prompt retrieval strategy.
+
+        Args:
+            input_embedding (torch.Tensor): Input embeddings of shape [batch_size, prompt_dim].
+            top_k (int): Number of top prompts to select.
+
+        Returns:
+            selected_prompts (torch.Tensor): Selected prompt values.
+            diversity_loss (torch.Tensor): Diversity loss term.
+            topk_indices (torch.Tensor): Indices of selected prompts.
+        """
+        similarities = self.compute_cosine_similarity(input_embedding)  # [B, num_prompts]
+        normalized_similarities = F.softmax(similarities, dim=1)
+
+        if self.dropout is not None:
+            normalized_similarities = self.dropout(normalized_similarities)
+            normalized_similarities = F.softmax(normalized_similarities, dim=1)
+
+        # Select top-k indices
+        topk_values, topk_indices = torch.topk(normalized_similarities, top_k, dim=1)
+
+        # Gather selected prompt values
+        selected_prompts = self.prompt_values[topk_indices]  # [B, top_k, prompt_dim]
+
+        # Compute diversity loss
+        diversity_loss = - topk_values.sum(dim=1).mean()
+
+        return selected_prompts, diversity_loss, topk_indices
+
+    def residual_strategy(self, input_embedding, top_k=5):
+        """
+        Residual-based selection strategy.
+        Iteratively selects the most relevant prompt, removes its contribution, and repeats.
+        Stops early if the residual falls below a set threshold.
+
+        Args:
+            input_embedding (torch.Tensor): Input embeddings of shape [batch_size, prompt_dim].
+            top_k (int): Maximum number of prompts to select.
+
+        Returns:
+            selected_prompts (torch.Tensor): Selected prompts up to `top_k`.
+            diversity_loss (torch.Tensor): Encourages diverse prompt selection.
+            topk_indices (torch.Tensor): Indices of selected prompts.
+        """
+        residual = input_embedding.clone()
+        selected_prompts = []
+        topk_indices = []
+
+        for _ in range(top_k):
+            # Compute similarities
+            similarities = self.compute_cosine_similarity(residual)  # [B, num_prompts]
+            normalized_similarities = F.softmax(similarities, dim=1)
+
+            # Select the most relevant prompt
+            top1_values, top1_indices = torch.topk(normalized_similarities, 1, dim=1)  # [B, 1]
+            topk_indices.append(top1_indices)
+
+            # Gather the selected prompt
+            selected_prompt = self.prompt_values[top1_indices.squeeze(dim=1)]  # [B, prompt_dim]
+            selected_prompts.append(selected_prompt.unsqueeze(1))  # Store for later stacking
+
+            # Update residual (subtracting selected prompt)
+            residual = residual - selected_prompt  # Ensuring differentiation
+
+            # **EARLY STOPPING**: If residual norm is below threshold, stop iterations
+            if torch.norm(residual, dim=-1).mean() < self.residual_threshold:
+                break  # Stop early if residual is sufficiently small
+
+        # Stack collected prompts along the second dimension
+        selected_prompts = torch.cat(selected_prompts, dim=1)  # [B, selected_top_k, prompt_dim]
+
+        # Concatenate indices
+        topk_indices = torch.cat(topk_indices, dim=1)  # [B, selected_top_k]
+
+        # Diversity loss (encourages diversity in selections)
+        diversity_loss = - selected_prompts.sum(dim=1).mean()
+
+        return selected_prompts, diversity_loss, topk_indices
+    def att_strategy(self, input_embedding):
+        """
+        Attention-based strategy where the input acts as a query, 
+        prompt keys are keys, and prompt values are values.
+
+        Returns:
+            selected_prompts: All prompts, each scaled by attention weights.
+            diversity_loss: Entropy-based loss to encourage diverse selections.
+            attention_weights: Attention scores over the prompt values.
+        """
+        # Compute attention scores (query-key dot product)
+        query = input_embedding.unsqueeze(1)  # [B, 1, prompt_dim]
+        keys = self.prompt_keys.unsqueeze(0)  # [1, num_prompts, prompt_dim]
+        
+        # Scaled Dot-Product Attention
+        attn_scores = torch.matmul(query, keys.transpose(-1, -2)) / (input_embedding.shape[-1] ** 0.5)  # [B, 1, num_prompts]
+        attn_weights = F.softmax(attn_scores, dim=-1)  # [B, 1, num_prompts]
+
+        # Apply dropout if specified
+        if self.dropout is not None:
+            attn_weights = self.dropout(attn_weights)
+
+        # **Mask out prompts below threshold** (zeroing out their values)
+        mask = (attn_weights >= self.attn_threshold).float()  # [B, 1, num_prompts]
+        attn_weights = attn_weights * mask  # Keep only values above threshold
+
+        # Compute per-prompt scaling (instead of weighted sum)
+        values = self.prompt_values.unsqueeze(0)  # [1, num_prompts, prompt_dim]
+        selected_prompts = attn_weights.transpose(1, 2) * values  # [B, num_prompts, prompt_dim]
+
+        # Diversity loss: Encourage balanced attention distribution
+        diversity_loss = -(attn_weights * torch.log(attn_weights + 1e-8)).sum(dim=-1).mean()
+
+        return selected_prompts, diversity_loss, attn_weights.squeeze(1)  # [B, num_prompts]    
 
     def forward(self, input_embedding, top_k=5):
         """
-        Selects the top-k relevant prompts based on similarity with the input.
-        Arguments:
-        - input_embedding: [batch_size, hidden_dim]
-        - top_k: Number of prompts to select
+        Forward pass to select top-k prompts based on the chosen strategy.
+
+        Args:
+            input_embedding (torch.Tensor): Input embeddings of shape [batch_size, prompt_dim].
+            top_k (int): Number of top prompts to select.
+
+        Returns:
+            selected_prompts (torch.Tensor): Selected prompt values.
+            diversity_loss (torch.Tensor): Diversity loss term.
+            topk_indices (torch.Tensor): Indices of selected prompts.
         """
-        # Compute similarities between input and prompt keys
-        similarities = self.compute_cosine_similarity(input_embedding)  # [batch_size, num_prompts]
-            
-        normalized_similarities = F.softmax(similarities, dim=1)
-        if self.dropout is not None:
-            normalized_similarities = self.dropout(normalized_similarities)
-            normalized_similarities = F.softmax(similarities, dim=1)
-            
-        # Select top-k indices and corresponding values
-        topk_values, topk_indices = torch.topk(normalized_similarities, top_k, dim=1)
-        
-        # Gather the selected prompt values
-        selected_prompts = self.prompt_values[topk_indices]  # [B, top_k, prompt_dim]
-        
-        # Compute diversity loss as the sum of the top-k similarity values, averaged over the batch
-        diversity_loss = - topk_values.sum(dim=1).mean()
-        
-        selected_prompts = self.prompt_values[topk_indices]  # [batch_size, top_k, prompt_dim]
-            
-        return selected_prompts, diversity_loss, topk_indices
-    
+        if self.strategy == "sim_strategy":
+            return self.sim_strategy(input_embedding, top_k)
+        elif self.strategy == "residual_strategy":
+            return self.residual_strategy(input_embedding, top_k)
+        elif self.strategy == "att_strategy":
+            return self.att_strategy(input_embedding)
+        else:
+            raise NotImplementedError(f"Strategy '{self.strategy}' is not implemented.")
+
+
     
 class SALMONN(nn.Module):
     @classmethod

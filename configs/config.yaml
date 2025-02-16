@@ -52,6 +52,7 @@ model:
   pool_size: 30
   prompt_size: 10
   p: 0.0
+  strategy: sim_strategy
 
   multi_prompt: True
   prompt_template: "USER: {}\nASSISTANT:"
