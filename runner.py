@@ -87,9 +87,7 @@ class Runner:
 
         # dataloaders
         self.train_loader = get_dataloader(datasets["train"], self.config.config.run, is_train=True, use_distributed=self.use_distributed)
-        # self.valid_loader = get_dataloader(datasets["valid"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
-        # self.test_loader = get_dataloader(datasets["test"], self.config.config.run, is_train=False, use_distributed=self.use_distributed)
-        
+
         if isinstance(datasets["valid"], dict):
             self.valid_loaders = {
                 name: get_dataloader(ds, self.config.config.run, is_train=False, use_distributed=self.use_distributed)
@@ -287,27 +285,16 @@ class Runner:
                 break
             
         print("Token use Counts:", token_use_counts)
-        # # After the loop, plot and save the histogram of token usage.
-        # # (Only the main process should handle file writing.)
-        # if is_main_process():
-        #     fig, ax = plt.subplots(figsize=(8, 6))
-        #     ax.bar(np.arange(num_tokens), sorted(token_use_counts), color='skyblue')
-        #     ax.set_xlabel("Prompt Token Index")
-        #     ax.set_ylabel("Selection Count")
-        #     ax.set_title(f"L2P Prompt Token Usage Histogram (Epoch {epoch})")
-        #     ax.grid(True, linestyle='--', alpha=0.6)  # Add grid with dashed lines
-        #     pdf_path = os.path.join(self.output_dir, f"l2p_usage_epoch_{epoch}.pdf")
-        #     fig.savefig(pdf_path)
-        #     plt.close(fig)
-        #     logging.info(f"L2P usage histogram saved to {pdf_path}")
 
         if not hasattr(self, "token_use_counts_by_dataset"):
             self.token_use_counts_by_dataset = {}
 
         self.token_use_counts_by_dataset[dataset_name] = token_use_counts
+        
+        n_datasets = len(self.valid_loaders) if hasattr(self, "valid_loaders") else 1
 
         # After all datasets are processed, plot the combined histogram
-        if is_main_process() and len(self.token_use_counts_by_dataset) == len(self.valid_loaders):
+        if is_main_process() and len(self.token_use_counts_by_dataset) == n_datasets:
             fig, ax = plt.subplots(figsize=(10, 6))
             num_tokens = len(next(iter(self.token_use_counts_by_dataset.values())))
 
@@ -316,10 +303,10 @@ class Runner:
             x = np.arange(num_tokens)  # Token indices
             colors = ["blue", "red", "green"]  # Different colors for each dataset
             alpha = 0.6  # Transparency for overlap visualization
-            num_datasets = len(self.token_use_counts_by_dataset)
+            n_datasets = len(self.token_use_counts_by_dataset)
 
             for i, ((ds_name, counts), color) in enumerate(zip(self.token_use_counts_by_dataset.items(), colors)):
-                ax.bar(x + (i - num_datasets / 2) * width, counts, width=width, alpha=alpha, label=ds_name, color=color, edgecolor="black")
+                ax.bar(x + (i - n_datasets / 2) * width, counts, width=width, alpha=alpha, label=ds_name, color=color)
 
             ax.set_xlabel("Prompt Token Index")
             ax.set_ylabel("Selection Count")
@@ -453,9 +440,11 @@ class Runner:
         set_verbosity_error()
         if hasattr(self, 'valid_loaders'):
                 for ds_name, loader in self.valid_loaders.items():
-                    valid_log = self.valid_epoch(0, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
+                    valid_log = self.valid_epoch(
+                        0, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
         else:
-            valid_log = self.valid_epoch(0, "valid", save_json=True)
+            valid_log = self.valid_epoch(
+                0, "valid", dataloader=self.valid_loader, dataset_name=self.config.config.datasets.dataset ,save_json=True)
         for cur_epoch in range(self.start_epoch, self.max_epoch):
             if self.evaluate_only:
                 break
@@ -464,25 +453,11 @@ class Runner:
             logging.info("Training Phase")
             train_stats = self.train_epoch(cur_epoch)
             self.log_stats(train_stats, split_name="train")
-
-            # validating phase
-            # logging.info("Validating Phase")
-            # set_verbosity_error()
-            # valid_log = self.valid_epoch(cur_epoch+1, "valid", save_json=True)
-            # if valid_log is not None:
-            #     if is_main_process():
-            #         agg_metrics = valid_log["mean_bleu_score"]
-            #         if agg_metrics > best_agg_metric:
-            #             best_agg_metric = agg_metrics
-            #             best_epoch = cur_epoch
-
-            #             self.save_checkpoint(cur_epoch, is_best=True)
-
-            #         valid_log.update({"best_epoch": best_epoch})
-            #         self.log_stats(valid_log, split_name="valid")
             
             logging.info("Validating Phase")
             set_verbosity_error()
+        
+            
             if hasattr(self, 'valid_loaders'):
                 for ds_name, loader in self.valid_loaders.items():
                     valid_log = self.valid_epoch(cur_epoch+1, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
