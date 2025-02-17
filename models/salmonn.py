@@ -264,7 +264,7 @@ class PromptPool(nn.Module):
             attn_weights = self.dropout(attn_weights)
         
         # Zero out attention values below the threshold
-        attn_weights = torch.where(attn_weights >= self.attn_threshold, attn_weights, torch.tensor(0.0, device=attn_weights.device))
+        # attn_weights = torch.where(attn_weights >= self.attn_threshold, attn_weights, torch.tensor(0.0, device=attn_weights.device))
         
         # Sort attention scores and corresponding indices in descending order
         sorted_attn, sorted_idx = torch.sort(attn_weights, descending=True, dim=-1)  # [B, num_prompts]
