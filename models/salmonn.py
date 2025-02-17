@@ -241,7 +241,7 @@ class PromptPool(nn.Module):
         return selected_prompts, diversity_loss, topk_indices
 
 
-    def att_strategy(self, input_embedding):
+    def att_strategy(self, input_embedding, top_k=5):
         """
         Attention-based strategy where the input acts as a query, 
         prompt keys are keys, and prompt values are values.
@@ -263,8 +263,9 @@ class PromptPool(nn.Module):
         if self.dropout is not None:
             attn_weights = self.dropout(attn_weights)
         
-        # Zero out attention values below the threshold
-        # attn_weights = torch.where(attn_weights >= self.attn_threshold, attn_weights, torch.tensor(0.0, device=attn_weights.device))
+        if self.use_prompt_threshhold:
+            # Zero out attention values below the threshold
+            attn_weights = torch.where(attn_weights >= self.attn_threshold, attn_weights, torch.tensor(0.0, device=attn_weights.device))
         
         # Sort attention scores and corresponding indices in descending order
         sorted_attn, sorted_idx = torch.sort(attn_weights, descending=True, dim=-1)  # [B, num_prompts]
@@ -273,12 +274,12 @@ class PromptPool(nn.Module):
         selected_prompts = self.prompt_values[sorted_idx] * sorted_attn.unsqueeze(-1)  # [B, num_prompts, prompt_dim]
         
         # Get valid indices where attention > 0
-        valid_indices = torch.where(sorted_attn > 0, sorted_idx, -1) # [valid_count]
-        
+        selected_indices = torch.where(sorted_attn > 0, sorted_idx, -1) # [B, num_prompts]
+        sorted_attn = sorted_attn[:,:top_k]
         # Diversity loss: Encourage balanced attention distribution
         diversity_loss = -(sorted_attn * torch.log(sorted_attn + 1e-8)).sum(dim=-1).mean()
         
-        return selected_prompts, diversity_loss, valid_indices
+        return selected_prompts[:,:top_k,:], diversity_loss, selected_indices[:,:top_k]
 
 
 
@@ -303,7 +304,7 @@ class PromptPool(nn.Module):
         elif self.prompt_strategy == "residual_strategy":
             return self.residual_strategy(input_data, top_k)
         elif self.prompt_strategy == "att_strategy":
-            return self.att_strategy(input_data)
+            return self.att_strategy(input_data, top_k)
         else:
             raise NotImplementedError(f"Strategy '{self.prompt_strategy}' is not implemented.")
 
