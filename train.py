@@ -61,6 +61,7 @@ def get_paths(dataset_name):
             "valid": "/home/toolkit/SALMONN/data/LibriASR/Librispeech-test-asr.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/libriSQA/",
         }
+        
     if dataset_name == "librisqa":
         return {
             "train": "/home/toolkit/SALMONN/data/LibriSQA/LibriSQA-train.json",
@@ -68,6 +69,7 @@ def get_paths(dataset_name):
             "valid": "/home/toolkit/SALMONN/data/LibriSQA/LibriSQA-test.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/libriSQA/",
         }
+        
     if dataset_name == "er":
         return {
             "train": "/home/toolkit/SALMONN/data/IEMOCAP/ie-train-full.json",
@@ -75,6 +77,7 @@ def get_paths(dataset_name):
             "valid": "/home/toolkit/SALMONN/data/IEMOCAP/ie-valid-full.json",
             "data_root": "users/rwhetten/IEMOCAP/IEMOCAP_full_release/",
         }
+        
     if dataset_name == "clotho_audio_cap":
         return {
             "train": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_development.json",
@@ -85,13 +88,12 @@ def get_paths(dataset_name):
     
     if dataset_name == "cv_trans":
         return {
-            "train": "/home/toolkit/SALMONN/data/VoxcelebTrans/CoVoST2-En2Zh-train.json",
-            "test": "/home/toolkit/SALMONN/data/VoxcelebTrans/CoVoST2-En2Zh-test.json",
-            "valid": "/home/toolkit/SALMONN/data/VoxcelebTrans/CoVoST2-En2Zh-dev.json",
+            "train": "/home/toolkit/SALMONN/data/CVTrans/CoVoST2-En2Zh-train.json",
+            "test": "/home/toolkit/SALMONN/data/CVTrans/CoVoST2-En2Zh-test.json",
+            "valid": "/home/toolkit/SALMONN/data/CVTrans/CoVoST2-En2Zh-dev.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/common_voice/clips",
         } 
         
-    
     if dataset_name == "voxceleb_sv":
         return {
             "train": "/home/toolkit/SALMONN/data/VoxcelebSV/train-pair.json",
@@ -139,7 +141,7 @@ def main():
         }
         
     else:
-        dataset_names = ["libriasr", "librisqa", "er", "clotho_audio_cap", "cv_trans", "voxceleb_sv"]
+        dataset_names = ["voxceleb_sv", "libriasr", "librisqa", "er", "clotho_audio_cap", "cv_trans"]
         train_datasets = []
         valid_datasets = {}
         test_datasets = {}
