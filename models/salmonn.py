@@ -267,23 +267,17 @@ class PromptPool(nn.Module):
             # Zero out attention values below the threshold
             attn_weights = torch.where(attn_weights >= self.attn_threshold, attn_weights, torch.tensor(0.0, device=attn_weights.device))
         
-        # Sort attention scores and corresponding indices in descending order
-        sorted_attn, sorted_idx = torch.sort(attn_weights, descending=True, dim=-1)  # [B, num_prompts]
-        
-        # Gather sorted prompt values and apply attention weights
-        selected_prompts = self.prompt_values[sorted_idx] * sorted_attn.unsqueeze(-1)  # [B, num_prompts, prompt_dim]
-        
-        # Get valid indices where attention > 0
-        selected_indices = torch.where(sorted_attn > 0, sorted_idx, -1) # [B, num_prompts]
-        sorted_attn = sorted_attn[:,:top_k]
+    
+        # **Select top-K highest attention prompts**
+        topk_attn, topk_idx = torch.topk(attn_weights, k=top_k, dim=-1)  # [B, top_k]
+        selected_prompts = self.prompt_values[topk_idx] * topk_attn.unsqueeze(-1)  # [B, top_k, prompt_dim]
+        selected_indices = topk_idx  # [B, top_k]
+
         # Diversity loss: Encourage balanced attention distribution
-        diversity_loss = -(sorted_attn * torch.log(sorted_attn + 1e-8)).sum(dim=-1).mean()
+        diversity_loss = -(attn_weights * torch.log(attn_weights + 1e-8)).sum(dim=-1).mean()
         
-        return selected_prompts[:,:top_k,:], diversity_loss, selected_indices[:,:top_k]
+        return selected_prompts, diversity_loss, selected_indices
 
-
-
- 
 
     def forward(self, input_data, top_k=5):
         """
