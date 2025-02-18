@@ -57,6 +57,7 @@ model:
   use_prompt_threshhold : False
   residual_threshold : 1e-5
   attn_threshold : 1e-5
+  stochastic: False
 
   multi_prompt: True
   prompt_template: "USER: {}\nASSISTANT:"
@@ -68,7 +69,7 @@ model:
   lambda_diversity: 0.5
 
 datasets:
-  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap"
+  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap", 
   dataset: "multitask"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
 

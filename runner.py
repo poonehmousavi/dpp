@@ -8,6 +8,7 @@ from pathlib import Path
 import logging
 import wandb
 import yaml
+from tqdm import tqdm
 
 import evaluate
 
@@ -44,11 +45,12 @@ class Runner:
         self.output_dir = Path(self.config.config.run.output_dir) / job_id
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.log_writter = SummaryWriter(self.output_dir)
+        self.eval_split = self.config.config.run.eval_split
         
         # Save config to a YAML file so it can be used later to load checkpoints.
-        config_path = self.output_dir / "config.yaml"
-        with open(config_path, "w") as f:
-            yaml.dump(self.config.to_dict(), f, default_flow_style=False)
+        # config_path = self.output_dir / "config.yaml"
+        # with open(config_path, "w") as f:
+        #     yaml.dump(self.config.to_dict(), f, default_flow_style=False)
 
         # settings
         self.device = torch.device(self.config.config.run.device)
@@ -57,6 +59,12 @@ class Runner:
         self.max_epoch = self.config.config.run.optims.max_epoch
         self.evaluate_only = self.config.config.run.evaluate
         self.cuda_enabled = (self.device.type == "cuda")
+        
+        if self.evaluate_only:
+            self.eval_dir = Path(self.config.config.run.eval_dir)
+            self.eval_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.eval_dir = self.output_dir
 
         # test prompt
         self.prompt_template = self.config.config.model.get("prompt_template", "")
@@ -126,9 +134,9 @@ class Runner:
             warmup_start_lr=self.config.config.run.optims.get("warmup_start_lr", -1),
         )
 
-        self.log_config()
+        # self.log_config()
         
-        if is_main_process():  # Prevent multiple processes from initializing wandb
+        if is_main_process() and not self.evaluate_only:  # Prevent multiple processes from initializing wandb
             logging.info(f"Initializing run name for wandb: {self.config.config.run.run_name}")
             wandb.init(
                 project=self.config.config.run.project_name,  # Replace with your W&B project
@@ -217,9 +225,6 @@ class Runner:
         start_time = time.time()
         model = self.unwrap_dist_model(self.model)
         model.eval()
-        
-        if dataloader is None:
-            dataloader = getattr(self, f"{split}_loader", None)
 
         metric_logger = MetricLogger(delimiter="  ")
         header = f"Eval: data epoch: [{epoch}]"
@@ -231,7 +236,7 @@ class Runner:
         rouge_metric = evaluate.load("rouge")
         rouge_scorer_obj = rouge_scorer.RougeScorer(["rouge4"], use_stemmer=True)
         wer_metric = evaluate.load("wer")
-
+        cer_metric = evaluate.load("cer")
 
         all_references = []  # For BLEU & ROUGE
         all_hypotheses = []
@@ -243,7 +248,7 @@ class Runner:
         num_tokens = model.pool_size if model.l2p else model.num_soft_prompt_tokens
         token_use_counts = [0] * num_tokens
 
-        for samples in metric_logger.log_every(dataloader, self.config.config.run.log_freq, header=header):
+        for samples in tqdm(dataloader, desc=header, total=len(dataloader)):
             samples = prepare_sample(samples, cuda_enabled=self.cuda_enabled)
             prompts = [self.test_prompt_dict[task] for task in samples["task"]]
 
@@ -281,7 +286,7 @@ class Runner:
             
             # Run validation on only a subset of data to enable faster training.
             valid_iters += 1
-            if self.config.config.run.num_valid_iters and valid_iters >= self.config.config.run.num_valid_iters:
+            if self.config.config.run.num_valid_iters != -1 and valid_iters >= self.config.config.run.num_valid_iters:
                 break
             
         print("Token use Counts:", token_use_counts)
@@ -295,8 +300,8 @@ class Runner:
 
         # After all datasets are processed, plot the combined histogram
         if is_main_process() and len(self.token_use_counts_by_dataset) == n_datasets:
-            with open(os.path.join(self.output_dir, "token_use_counts.json"), "w") as f:
-                json.dump(self.token_use_counts_by_dataset, f, indent=4)
+            # with open(os.path.join(self.output_dir, "token_use_counts.json"), "w") as f:
+            #     json.dump(self.token_use_counts_by_dataset, f, indent=4)
             self.token_use_counts_by_dataset = {}
             
         # **Compute Corpus-Level BLEU Score**
@@ -316,6 +321,7 @@ class Runner:
         # Compute WER 
         wer_start_time = time.time()
         wer_score = wer_metric.compute(predictions=all_hypotheses, references=all_references)
+        cer_score = cer_metric.compute(predictions=all_hypotheses, references=all_references)
         wer_time = time.time() - wer_start_time
 
         # **Synchronize Across Distributed Processes**
@@ -334,6 +340,7 @@ class Runner:
         mean_rouge = rouge_scores["rougeL"] if total_samples > 0 else 0.0
         mean_rouge4 = total_rouge4_score if total_samples > 0 else 0.0
         mean_wer = wer_score if total_samples > 0 else 0.0
+        mean_cer = cer_score if total_samples > 0 else 0.0
 
 
         total_validation_time = time.time() - start_time
@@ -348,6 +355,7 @@ class Runner:
         logging.info(f" - ROUGE-L Score: {mean_rouge:.4f}")
         logging.info(f" - ROUGE4 Score: {mean_rouge4:.4f}")
         logging.info(f" - WER Score: {mean_wer:.4f}")
+        logging.info(f" - CER Score: {mean_cer:.4f}")
         
         # **Save JSON if needed**
         if save_json and is_main_process():
@@ -355,13 +363,14 @@ class Runner:
 
         header = dataset_name if dataset_name else "val"
         # **Log Results to WandB**
-        if is_main_process():
+        if is_main_process() and not self.evaluate_only:
             wandb.log({
                 f"{header}/mean_exact_match": mean_exact,
                 f"{header}/mean_bleu_score": mean_bleu,
                 f"{header}/mean_rougeL_score": mean_rouge,
                 f"{header}/mean_rouge4_score": mean_rouge4,
                 f"{header}/mean_wer_score": mean_wer,
+                f"{header}/mean_cer_score": mean_cer,
                 "epoch": epoch
             })
 
@@ -371,6 +380,9 @@ class Runner:
             "mean_rougeL_score": mean_rouge,
             "mean_rouge4_score": mean_rouge4,
             "mean_wer_score": mean_wer,
+            "mean_cer_score": mean_cer,
+            "total_validation_time": total_validation_time,
+            "token_use_counts": token_use_counts,
         }
 
 
@@ -414,17 +426,34 @@ class Runner:
 
     def train(self):
         start_time = time.time()
-        best_agg_metric = 0
-        best_epoch = 0
+        # best_agg_metric = 0
+        # best_epoch = 0
 
         set_verbosity_error()
-        if hasattr(self, 'valid_loaders'):
-                for ds_name, loader in self.valid_loaders.items():
-                    valid_log = self.valid_epoch(
-                        0, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
+        # if hasattr(self, 'valid_loaders'):
+        #         for ds_name, loader in self.valid_loaders.items():
+        #             valid_log = self.valid_epoch(
+        #                 0, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
+        # else:
+        #     valid_log = self.valid_epoch(
+        #         0, "valid", dataloader=self.valid_loader, dataset_name=self.config.config.datasets.dataset ,save_json=True)
+        split_loaders = getattr(self, f"{self.eval_split}_loaders", None)
+        default_loader = getattr(self, f"{self.eval_split}_loader", None)
+
+        valid_logs_by_dataset = {}
+        if split_loaders:
+            for ds_name, loader in split_loaders.items():
+                valid_log = self.valid_epoch(0, self.eval_split, dataloader=loader, dataset_name=ds_name, save_json=not self.evaluate_only)
+                valid_logs_by_dataset[ds_name] = valid_log
         else:
-            valid_log = self.valid_epoch(
-                0, "valid", dataloader=self.valid_loader, dataset_name=self.config.config.datasets.dataset ,save_json=True)
+            valid_log = self.valid_epoch(0, self.eval_split, dataloader=default_loader, dataset_name=self.config.config.datasets.dataset, save_json=not self.evaluate_only)
+            valid_logs_by_dataset[self.config.config.datasets.dataset] = valid_log
+            
+        for ds_name, valid_logs in valid_logs_by_dataset.items():
+            output_path = os.path.join(self.eval_dir, f"{ds_name}_0.json")
+            with open(output_path, "w") as f:
+                json.dump(valid_logs, f, indent=4)
+
         for cur_epoch in range(self.start_epoch, self.max_epoch):
             if self.evaluate_only:
                 break
@@ -437,31 +466,37 @@ class Runner:
             logging.info("Validating Phase")
             set_verbosity_error()
         
-            
-            if hasattr(self, 'valid_loaders'):
-                for ds_name, loader in self.valid_loaders.items():
-                    valid_log = self.valid_epoch(cur_epoch+1, "valid", dataloader=loader, dataset_name=ds_name, save_json=True)
+            valid_logs_by_dataset = {}
+            if split_loaders is not None:
+                for ds_name, loader in split_loaders.items():
+                    valid_log = self.valid_epoch(cur_epoch+1, self.eval_split, dataloader=loader, dataset_name=ds_name, save_json=True)
                     # Prefix the metric names with the dataset name
                     valid_log = {f"{ds_name}_{k}": v for k, v in valid_log.items()}
-                    self.log_stats(valid_log, split_name="valid")
-                    # Optionally, use one of the metrics (say from "librisqa") for checkpointing
-                    if ds_name == "librisqa":
-                        agg_metrics = valid_log.get("libriasr_mean_bleu_score", 0)
-                        if agg_metrics > best_agg_metric:
-                            best_agg_metric = agg_metrics
-                            best_epoch = cur_epoch
-                            self.save_checkpoint(cur_epoch, is_best=True)
+                    valid_logs_by_dataset[ds_name] = valid_log
+                    # self.log_stats(valid_log, split_name=self.eval_split)
+                    # # Optionally, use one of the metrics (say from "librisqa") for checkpointing
+                    # if ds_name == "librisqa":
+                    #     agg_metrics = valid_log.get("libriasr_mean_bleu_score", 0)
+                    #     if agg_metrics > best_agg_metric:
+                    #         best_agg_metric = agg_metrics
+                    #         best_epoch = cur_epoch
+                    #         self.save_checkpoint(cur_epoch, is_best=True)
             else:
-                valid_log = self.valid_epoch(cur_epoch+1, "valid", save_json=True)
-                if valid_log is not None:
-                    if is_main_process():
-                        agg_metrics = valid_log["mean_bleu_score"]
-                        if agg_metrics > best_agg_metric:
-                            best_agg_metric = agg_metrics
-                            best_epoch = cur_epoch
-                            self.save_checkpoint(cur_epoch, is_best=True)
-                        valid_log.update({"best_epoch": best_epoch})
-                        self.log_stats(valid_log, split_name="valid")
+                valid_log = self.valid_epoch(cur_epoch+1, self.eval_split, dataloader=default_loader, dataset_name=self.config.config.datasets.dataset, save_json=True)
+                valid_logs_by_dataset[self.config.config.datasets.dataset] = valid_log
+                # if valid_log is not None:
+                #     if is_main_process():
+                #         agg_metrics = valid_log["mean_bleu_score"]
+                #         if agg_metrics > best_agg_metric:
+                #             best_agg_metric = agg_metrics
+                #             best_epoch = cur_epoch
+                #             self.save_checkpoint(cur_epoch, is_best=True)
+                #         valid_log.update({"best_epoch": best_epoch})
+                #         self.log_stats(valid_log, split_name=self.eval_split)
+            for ds_name, valid_logs in valid_logs_by_dataset.items():
+                output_path = os.path.join(self.output_dir, f"{ds_name}_{cur_epoch+1}.json")
+                with open(output_path, "w") as f:
+                    json.dump(valid_logs, f, indent=4)
 
             self.save_checkpoint(cur_epoch, is_best=False)
 

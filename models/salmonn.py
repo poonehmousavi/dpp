@@ -371,6 +371,7 @@ class SALMONN(nn.Module):
         residual_threshold=1e-3, 
         attn_threshold=0.05,
         use_prompt_threshhold= False,
+        stochastic=False,
 
         lambda_diversity=1.0,
 
@@ -407,6 +408,7 @@ class SALMONN(nn.Module):
         self.residual_threshold =residual_threshold
         self.use_prompt_threshhold=use_prompt_threshhold
         self.attn_threshold= attn_threshold
+        self.stochastic = stochastic
         
         self.lambda_diversity = lambda_diversity
         
@@ -635,17 +637,18 @@ class SALMONN(nn.Module):
         if self.l2p:
             assert input_representations is not None, "Input representations are required for L2P."
             if inference:
-                top_k = int(0.4 * self.pool_size)  # deterministic at inference
+                sp_size = int(0.4 * self.pool_size)  # deterministic at inference
             else:
                 # Random randint is inclusive of both end points!
-                top_k = random.randint(1, self.pool_size) if self.prompt_size == -1 else self.prompt_size
-            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=top_k)  # Select relevant prompts
+                sp_size = random.randint(1, self.pool_size) if self.stochastic else self.prompt_size
+            selected_prompts, diversity_loss, token_indices = self.prompt_pool(input_representations, top_k=sp_size)  # Select relevant prompts
             inputs_embeds = torch.cat([selected_prompts, inputs_embeds], dim=1)
         else:
             batch_size = inputs_embeds.size(0)
-            soft_prompts = self.soft_prompt_embeddings.expand(batch_size, -1, -1)
+            sp_size = self.num_soft_prompt_tokens if inference or not self.stochastic else random.randint(1, self.num_soft_prompt_tokens)
+            soft_prompts = self.soft_prompt_embeddings[:, :sp_size, :].expand(batch_size, -1, -1)
             inputs_embeds = torch.cat([soft_prompts, inputs_embeds], dim=1)
-            token_indices = torch.arange(0, self.num_soft_prompt_tokens)
+            token_indices = torch.arange(0, sp_size)[None].repeat(batch_size, 1)
             diversity_loss = 0.0
         return inputs_embeds, diversity_loss, token_indices
 
@@ -749,12 +752,11 @@ class SALMONN(nn.Module):
         diversity_loss = 0.0
         if self.use_soft_prompting or self.l2p:
             inputs_embeds, diversity_loss, token_indices = self.inject_soft_prompt(inputs_embeds, speech_embeds.mean(1), inference=False)
-            num_tokens = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
             soft_prompt_mask = torch.ones(
-                inputs_embeds.shape[0], num_tokens, device=inputs_embeds.device, dtype=attention_mask.dtype
+                inputs_embeds.shape[0], token_indices.size(1), device=inputs_embeds.device, dtype=attention_mask.dtype
             )  # Create an attention mask for the soft prompts
             attention_mask = torch.cat([soft_prompt_mask, attention_mask], dim=1)
-            empty_target_size += num_tokens
+            empty_target_size += token_indices.size(1)
             
         # insert empty target tokens
         empty_targets = (
@@ -812,11 +814,9 @@ class SALMONN(nn.Module):
         if self.use_soft_prompting or self.l2p: 
             embeds, _, token_indices = self.inject_soft_prompt(embeds, speech_embeds.mean(1), inference=True)
             
-            num_prompts = self.num_soft_prompt_tokens if self.use_soft_prompting else token_indices.size(1)
-            
             # Create a soft prompt attention mask (all ones)
             soft_prompt_mask = torch.ones(
-                (embeds.shape[0], num_prompts), 
+                (embeds.shape[0], token_indices.size(1)), 
                 dtype=attns.dtype, 
                 device=attns.device
             )
@@ -886,6 +886,7 @@ class SALMONN(nn.Module):
         end_sym = config.get("end_sym", "</s>")
         low_resource = config.get("low_resource", False)
         device_8bit = config.get("device_8bit", 0)
+        stochastic = config.get("stochastic", False)
         
         lambda_diversity = config.get("lambda_diversity", 1.0)
         p = config.get("p", 0.1)
@@ -915,6 +916,7 @@ class SALMONN(nn.Module):
             pool_size=pool_size,
             prompt_size=prompt_size,
             prompt_strategy =prompt_strategy,
+            stochastic=stochastic,
             residual_threshold =residual_threshold,
             use_prompt_threshhold= use_prompt_threshhold,
             attn_threshold =attn_threshold,
