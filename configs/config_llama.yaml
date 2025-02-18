@@ -15,7 +15,7 @@
 model:
   # paths
   # llama_path: "/mnt/dssk/data_rw/shubham/l2p/llama3"
-  llama_model_name: "lmsys/vicuna-13b-v1.1"
+  llama_model_name: "meta-llama/Meta-Llama-3-8B-Instruct"
   cache_dir: "/mnt/dssk/data_rw/shubham/l2p/llama3"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
   beats_path: "/mnt/dssk/data_rw/shubham/l2p/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt"
@@ -49,8 +49,8 @@ model:
 
   # Pooled Soft Prompting
   l2p: False
-  pool_size: 30
-  prompt_size: 10
+  pool_size: 50
+  prompt_size: 20
   p: 0.0
   prompt_strategy: sim_strategy #sim_strategy , residual_strategy, att_strategy
   similarity_method: cosine
@@ -60,16 +60,17 @@ model:
   stochastic: False
 
   multi_prompt: True
-  prompt_template: "USER: {}\nASSISTANT:"
+  prompt_template: "<|begin_of_text|><|start_header_id|>system<|end_header_id|>You are a helpful AI assistant for solving speech related tasks. <|eot_id|><|start_header_id|>user<|end_header_id|> {} <|eot_id|><|start_header_id|>assistant<|end_header_id|> "
   prompt_path: "prompts/train_prompt.json"
   test_prompt_path: "prompts/test_prompt.json"
   max_txt_len: 300
-  end_sym: "</s>"
+  end_sym: "<|eot_id|>"
 
   lambda_diversity: 0.5
 
 datasets:
-  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap", 
+
+  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap", "voxceleb_sv", "cv_trans" 
   dataset: "multitask"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
 
@@ -81,7 +82,7 @@ run:
   eval_dir: ""
   eval_split: "valid"
 
-  valid_iters: 25
+  num_valid_iters: 12
   wandb_report_every: 500
 
   log_freq: 5
@@ -101,7 +102,7 @@ run:
   run_name: "baseline"
   project_name: "l2p"
 
-  max_new_tokens: 10
+  max_new_tokens: 150
 
   # optimizer & scheduler
   optims:
