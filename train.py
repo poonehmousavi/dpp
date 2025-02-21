@@ -81,8 +81,8 @@ def get_paths(dataset_name):
     if dataset_name == "clotho_audio_cap":
         return {
             "train": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_development.json",
-            "test": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_validation.json",
-            "valid": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_development.json",
+            "test": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/grouped_clotho_captions_evaluation.json",
+            "valid": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/grouped_clotho_captions_validation.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/clotho/",
         }    
     
@@ -152,7 +152,7 @@ def main():
             paths = get_paths(ds)
             train_datasets.append(SALMONNDataset(paths["train"], data_config.whisper_path, paths["data_root"]))
             valid_datasets[ds] = SALMONNDataset(paths["valid"], data_config.whisper_path, paths["data_root"])
-            test_datasets[ds] = SALMONNDataset(paths["test"], data_config.whisper_path, paths["data_root"])
+            test_datasets[ds] = SALMONNDataset(paths["test"], data_config.whisper_path, paths["data_root"], subset=10000 if ds == "voxceleb_sv" else None)
 
         datasets = {
             "train": ConcatDatasetWithCollater(train_datasets),  # train on all datasets together

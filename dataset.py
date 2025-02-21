@@ -28,6 +28,7 @@ class SALMONNDataset(Dataset):
         super().__init__()
 
         self.annotation = json.load(open(ann_path, "r"))["annotation"]
+
         # Replace `{data_root}` in all paths
         for entry in self.annotation :
             entry["path"] = entry["path"].replace("{data_root}", data_root)

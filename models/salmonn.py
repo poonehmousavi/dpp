@@ -637,7 +637,8 @@ class SALMONN(nn.Module):
         if self.l2p:
             assert input_representations is not None, "Input representations are required for L2P."
             if inference:
-                sp_size = int(0.4 * self.pool_size)  # deterministic at inference
+                # sp_size = int(0.4 * self.pool_size)  # deterministic at inference
+                sp_size = self.prompt_size
             else:
                 # Random randint is inclusive of both end points!
                 sp_size = random.randint(1, self.pool_size) if self.stochastic else self.prompt_size
@@ -645,7 +646,10 @@ class SALMONN(nn.Module):
             inputs_embeds = torch.cat([selected_prompts, inputs_embeds], dim=1)
         else:
             batch_size = inputs_embeds.size(0)
-            sp_size = self.num_soft_prompt_tokens if inference or not self.stochastic else random.randint(1, self.num_soft_prompt_tokens)
+            if inference:
+                sp_size = self.prompt_size if self.stochastic else self.num_soft_prompt_tokens
+            else:
+                sp_size = random.randint(1, self.num_soft_prompt_tokens) if self.stochastic else self.num_soft_prompt_tokens
             soft_prompts = self.soft_prompt_embeddings[:, :sp_size, :].expand(batch_size, -1, -1)
             inputs_embeds = torch.cat([soft_prompts, inputs_embeds], dim=1)
             token_indices = torch.arange(0, sp_size)[None].repeat(batch_size, 1)

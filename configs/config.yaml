@@ -16,7 +16,7 @@ model:
   # paths
   # llama_path: "/mnt/dssk/data_rw/shubham/l2p/llama3"
   llama_model_name: "lmsys/vicuna-13b-v1.1"
-  cache_dir: "/mnt/dssk/data_rw/shubham/l2p/llama3"
+  cache_dir: "/mnt/dssk/data_rw/shubham/l2p/vicuna_new"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
   beats_path: "/mnt/dssk/data_rw/shubham/l2p/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt"
 
