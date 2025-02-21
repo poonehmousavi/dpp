@@ -1,0 +1,31 @@
+{
+    "mean_exact_match": 0.7400721907615662,
+    "mean_bleu_score": 0.0,
+    "mean_rougeL_score": 0.7418772563176895,
+    "mean_rouge4_score": 0.0,
+    "mean_wer_score": 0.259927797833935,
+    "mean_cer_score": 0.28561501042390547,
+    "total_validation_time": 142.80351042747498,
+    "token_use_counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+    ]
+}

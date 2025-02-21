@@ -16,7 +16,7 @@ model:
   # paths
   # llama_path: "/mnt/dssk/data_rw/shubham/l2p/llama3"
   llama_model_name: "lmsys/vicuna-13b-v1.1"
-  cache_dir: "/mnt/dssk/data_rw/shubham/l2p/llama3"
+  cache_dir: "/mnt/dssk/data_rw/shubham/l2p/vicuna_new"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
   beats_path: "/mnt/dssk/data_rw/shubham/l2p/beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt2.pt"
 
@@ -52,6 +52,12 @@ model:
   pool_size: 30
   prompt_size: 10
   p: 0.0
+  prompt_strategy: sim_strategy #sim_strategy , residual_strategy, att_strategy
+  similarity_method: cosine
+  use_prompt_threshhold : False
+  residual_threshold : 1e-5
+  attn_threshold : 1e-5
+  stochastic: False
 
   multi_prompt: True
   prompt_template: "USER: {}\nASSISTANT:"
@@ -63,8 +69,8 @@ model:
   lambda_diversity: 0.5
 
 datasets:
-  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap"
-  dataset: "libriasr"
+  # possible options right now are "librisqa", "libriasr", "er", "clotho_audio_cap", 
+  dataset: "multitask"
   whisper_path: "/mnt/dssk/data_rw/shubham/l2p/whisper/"
 
 run:
@@ -72,6 +78,8 @@ run:
   seed: 42
   output_dir: "baseline_run_wandb"
   evaluate: False # if True, only evaluate model on test data
+  eval_dir: ""
+  eval_split: "valid"
 
   valid_iters: 25
   wandb_report_every: 500

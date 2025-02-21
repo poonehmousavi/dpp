@@ -14,6 +14,7 @@
 
 import logging
 import time
+import os
 
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
@@ -52,7 +53,7 @@ def get_dataloader(dataset, config, is_train=True, use_distributed=True):
     loader = DataLoader(
         dataset,
         batch_size=config.batch_size_train if is_train else config.batch_size_eval,
-        num_workers=config.num_workers,
+        num_workers= max(1, os.cpu_count() // 2), #config.num_workers,
         pin_memory=True,
         sampler=sampler,
         shuffle=sampler is None and is_train,

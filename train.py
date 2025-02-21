@@ -25,6 +25,8 @@ from dist_utils import get_rank, init_distributed_mode
 from models import load_model
 from dataset import SALMONNDataset
 from runner import Runner
+from torch.utils.data import ConcatDataset
+
 
 
 def parse_args():
@@ -59,6 +61,7 @@ def get_paths(dataset_name):
             "valid": "/home/toolkit/SALMONN/data/LibriASR/Librispeech-test-asr.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/libriSQA/",
         }
+        
     if dataset_name == "librisqa":
         return {
             "train": "/home/toolkit/SALMONN/data/LibriSQA/LibriSQA-train.json",
@@ -66,6 +69,7 @@ def get_paths(dataset_name):
             "valid": "/home/toolkit/SALMONN/data/LibriSQA/LibriSQA-test.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/libriSQA/",
         }
+        
     if dataset_name == "er":
         return {
             "train": "/home/toolkit/SALMONN/data/IEMOCAP/ie-train-full.json",
@@ -73,15 +77,35 @@ def get_paths(dataset_name):
             "valid": "/home/toolkit/SALMONN/data/IEMOCAP/ie-valid-full.json",
             "data_root": "users/rwhetten/IEMOCAP/IEMOCAP_full_release/",
         }
+        
     if dataset_name == "clotho_audio_cap":
         return {
             "train": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_development.json",
-            "test": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_validation.json",
-            "valid": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/clotho_captions_development.json",
+            "test": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/grouped_clotho_captions_evaluation.json",
+            "valid": "/home/toolkit/SALMONN/data/CLOTHIO_AUDIOCAP/grouped_clotho_captions_validation.json",
             "data_root": "/mnt/dssk/data_rw/shubham/l2p/clotho/",
         }    
     
-
+    if dataset_name == "cv_trans":
+        return {
+            "train": "/home/toolkit/SALMONN/data/CVTrans/CoVoST2-En2Zh-train.json",
+            "test": "/home/toolkit/SALMONN/data/CVTrans/CoVoST2-En2Zh-test.json",
+            "valid": "/home/toolkit/SALMONN/data/CVTrans/CoVoST2-En2Zh-dev.json",
+            "data_root": "/mnt/dssk/data_rw/shubham/l2p/common_voice/clips",
+        } 
+        
+    if dataset_name == "voxceleb_sv":
+        return {
+            "train": "/home/toolkit/SALMONN/data/VoxcelebSV/train-pair.json",
+            "test": "/home/toolkit/SALMONN/data/VoxcelebSV/test-pair.json",
+            "valid": "/home/toolkit/SALMONN/data/VoxcelebSV/dev-pair.json",
+            "data_root": "/mnt/dssk/data_rw/shubham/l2p/voxceleb/voxceleb1",
+        } 
+    
+class ConcatDatasetWithCollater(ConcatDataset):
+    def __init__(self, datasets):
+        super().__init__(datasets)
+        self.collater = datasets[0].collater
 
 def main():
     # set before init_distributed_mode() to ensure the same job_id shared across all ranks.
@@ -104,14 +128,39 @@ def main():
     # build model
     model = load_model(model_config)
     
-    dataset_paths = get_paths(data_config.dataset)
+    dataset_name = data_config.dataset
+    
+    if dataset_name != "multitask":
+        dataset_paths = get_paths(data_config.dataset)
 
-    # build datasets
-    datasets = {
-        "train": SALMONNDataset(dataset_paths["train"], data_config.whisper_path, dataset_paths["data_root"]),
-        "valid": SALMONNDataset(dataset_paths["valid"], data_config.whisper_path, dataset_paths["data_root"]),
-        "test": SALMONNDataset(dataset_paths["test"], data_config.whisper_path, dataset_paths["data_root"]),
-    }
+        # build datasets
+        datasets = {
+            "train": SALMONNDataset(dataset_paths["train"], data_config.whisper_path, dataset_paths["data_root"]),
+            "valid": SALMONNDataset(dataset_paths["valid"], data_config.whisper_path, dataset_paths["data_root"]),
+            "test": SALMONNDataset(dataset_paths["test"], data_config.whisper_path, dataset_paths["data_root"]),
+        }
+        
+    else:
+        dataset_names = ["voxceleb_sv", "libriasr", "librisqa", "er", "clotho_audio_cap", "cv_trans"]
+        train_datasets = []
+        valid_datasets = {}
+        test_datasets = {}
+        print("Loading datasets")
+        
+        for ds in dataset_names:
+            print(f"Loading {ds}")
+            paths = get_paths(ds)
+            train_datasets.append(SALMONNDataset(paths["train"], data_config.whisper_path, paths["data_root"]))
+            valid_datasets[ds] = SALMONNDataset(paths["valid"], data_config.whisper_path, paths["data_root"])
+            test_datasets[ds] = SALMONNDataset(paths["test"], data_config.whisper_path, paths["data_root"], subset=10000 if ds == "voxceleb_sv" else None)
+
+        datasets = {
+            "train": ConcatDatasetWithCollater(train_datasets),  # train on all datasets together
+            "valid": valid_datasets,                 # separate valid sets per dataset
+            "test": test_datasets,                   # same for test
+        }
+        
+    print(f"Finished loading. Lengths: train: {len(datasets['train'])}, val: {len(datasets['valid'])}, test: {len(datasets['test'])}")
 
     # build runner
     runner = Runner(cfg, model, datasets, job_id)
