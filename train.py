@@ -152,7 +152,7 @@ def main():
             paths = get_paths(ds)
             train_datasets.append(SALMONNDataset(paths["train"], data_config.whisper_path, paths["data_root"]))
             valid_datasets[ds] = SALMONNDataset(paths["valid"], data_config.whisper_path, paths["data_root"])
-            test_datasets[ds] = SALMONNDataset(paths["test"], data_config.whisper_path, paths["data_root"], subset=10000 if ds == "voxceleb_sv" else None)
+            test_datasets[ds] = SALMONNDataset(paths["test"], data_config.whisper_path, paths["data_root"])
 
         datasets = {
             "train": ConcatDatasetWithCollater(train_datasets),  # train on all datasets together
