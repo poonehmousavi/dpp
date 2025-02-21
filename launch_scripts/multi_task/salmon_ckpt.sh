@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Define dataset values
+DATASETS=("libriasr")  # ("voxceleb_sv" "libriasr" "librisqa" "er" "clotho_audio_cap" "cv_trans")
+EVAL_DIR="evaluations/multi_task/salmon_ckpt_new/"
+CHECKPOINT="/mnt/dssk/data_rw/shubham/l2p/ckpt/salmonn_v1.pth"
+
+for dataset in "${DATASETS[@]}"; do
+  EXP_NAME="tmp"
+  echo "Running evaluation for dataset: $dataset (Experiment: $EXP_NAME)"
+  
+  # Launch the job with the current configuration
+  eai job new \
+    --restartable \
+    --image registry.toolkit-sp.yul201.service-now.com/snow.shared/interactive-toolkit \
+    --data snow.research.dssk.data:/mnt/dssk/data:ro \
+    --data snow.research.dssk.data:/mnt/dssk/data_rw \
+    --data snow.research.dssk.results:/mnt/dssk/results \
+    --data snow.research.dssk.shubham_gupta1:/home/toolkit \
+    --workdir /home/toolkit \
+    --env HOME=/home/toolkit \
+    --cpu 32 \
+    --mem 320 \
+    --gpu 1 \
+    --gpu-mem 80 \
+    --gpu-model-filter=H100 \
+    --env EXP_NAME="$EXP_NAME" \
+    -- bash -c "
+        source /home/toolkit/.bashrc;
+        source activate salmon;
+        cd /home/toolkit/SALMONN/;
+        python3 train.py \
+            --cfg-path configs/config.yaml \
+            --options run.run_name=$EXP_NAME \
+            model.lora=True \
+            model.soft_prompts=False \
+            model.l2p=False \
+            run.eval_dir=$EVAL_DIR \
+            run.output_dir=$EXP_NAME \
+            datasets.dataset=$dataset \
+            run.eval_split=test \
+            model.ckpt=$CHECKPOINT \
+            run.batch_size_eval=1 \
+            run.evaluate=True \
+            run.num_valid_iters=-1;
+    " &
+
+  sleep 2  # Small delay to avoid overloading the job scheduler
+done
+
+wait  # Wait for all jobs to finish before exiting the script
+

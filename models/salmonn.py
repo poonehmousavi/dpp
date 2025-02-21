@@ -29,58 +29,6 @@ from .modeling_whisper import WhisperModel
 from .beats.BEATs import BEATsConfig, BEATs
 from .utils import StoppingCriteriaSub
 
-# class PromptPool(nn.Module):
-#     def __init__(self, num_prompts=20, prompt_dim=1024, model_input_embeds=None, p=0.1):
-#         super().__init__()
-#         self.num_prompts = num_prompts
-        
-#         # Initialize keys with small random values
-#         self.prompt_keys = nn.Parameter(torch.randn(num_prompts, prompt_dim) * 0.01)  # Learnable keys
-        
-#         # Initialize values based on model input embeddings mean plus noise
-#         if model_input_embeds is not None:
-#             self.prompt_values = nn.Parameter(model_input_embeds)
-#         else:
-#             self.prompt_values = nn.Parameter(torch.randn(num_prompts, prompt_dim))
-            
-#         self.dropout = None
-#         if p > 0:
-#             self.dropout = torch.nn.Dropout(p)
-            
-#     def compute_cosine_similarity(self, input_embedding):
-#         """Compute cosine similarities between normalized input_embedding and prompt keys."""
-#         norm_input = F.normalize(input_embedding, dim=-1)       # [B, prompt_dim]
-#         norm_keys = F.normalize(self.prompt_keys, dim=-1)         # [num_prompts, prompt_dim]
-#         return torch.matmul(norm_input, norm_keys.T)              # [B, num_prompts]
-
-#     def forward(self, input_embedding, top_k=5):
-#         """
-#         Selects the top-k relevant prompts based on similarity with the input.
-#         Arguments:
-#         - input_embedding: [batch_size, hidden_dim]
-#         - top_k: Number of prompts to select
-#         """
-#         # Compute similarities between input and prompt keys
-#         similarities = self.compute_cosine_similarity(input_embedding)  # [batch_size, num_prompts]
-            
-#         normalized_similarities = F.softmax(similarities, dim=1)
-#         if self.dropout is not None:
-#             normalized_similarities = self.dropout(normalized_similarities)
-#             normalized_similarities = F.softmax(similarities, dim=1)
-            
-#         # Select top-k indices and corresponding values
-#         topk_values, topk_indices = torch.topk(normalized_similarities, top_k, dim=1)
-        
-#         # Gather the selected prompt values
-#         selected_prompts = self.prompt_values[topk_indices]  # [B, top_k, prompt_dim]
-        
-#         # Compute diversity loss as the sum of the top-k similarity values, averaged over the batch
-#         diversity_loss = - topk_values.sum(dim=1).mean()
-        
-#         selected_prompts = self.prompt_values[topk_indices]  # [batch_size, top_k, prompt_dim]
-            
-#         return selected_prompts, diversity_loss, topk_indices
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
